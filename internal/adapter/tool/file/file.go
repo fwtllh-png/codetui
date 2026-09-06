@@ -252,8 +252,16 @@ func (o *operation) Descriptor() tool.Descriptor {
 			"minLength":   float64(1),
 			"description": "Workspace-relative file path",
 		}
-		properties["start_line"] = map[string]any{"type": "integer"}
-		properties["max_lines"] = map[string]any{"type": "integer"}
+		properties["start_line"] = map[string]any{
+			"type": "integer",
+			"description": "First line of the window to read. Required once " +
+				"this path has search hits or prior reads: read only the " +
+				"located window; whole-file reads of touched paths are refused.",
+		}
+		properties["max_lines"] = map[string]any{
+			"type":        "integer",
+			"description": "Maximum number of lines to return from the window",
+		}
 		properties["pages"] = map[string]any{"type": "string"}
 	case "file_write":
 		description = "Atomically write a UTF-8 text file. path is workspace-relative. " +

@@ -663,3 +663,28 @@ func TestRegistryCloseReleasesExecutorResources(t *testing.T) {
 		t.Fatalf("close calls = %d, want 1", instance.closed.Load())
 	}
 }
+
+func TestModelResultRetainsEditRecoveryFacts(t *testing.T) {
+	input := Result{Content: "failed", IsError: true, Metadata: map[string]any{
+		"error_category":   "edit_precondition_miss",
+		"required_action":  "file_read",
+		"failed_change":    1,
+		"match_count":      0,
+		"start_line":       74,
+		"end_line":         80,
+		"current_excerpt":  "actual current text",
+		"canonical_path":   "/private/workspace/a.go",
+	}}
+	projected := ModelResult("file_apply", input)
+	for _, key := range []string{
+		"failed_change", "match_count", "start_line", "end_line",
+		"current_excerpt",
+	} {
+		if _, ok := projected.Metadata[key]; !ok {
+			t.Fatalf("projected metadata lost %q: %#v", key, projected.Metadata)
+		}
+	}
+	if _, ok := projected.Metadata["canonical_path"]; ok {
+		t.Fatalf("projected metadata retained runtime-only key: %#v", projected.Metadata)
+	}
+}

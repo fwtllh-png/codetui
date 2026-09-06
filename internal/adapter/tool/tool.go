@@ -1390,7 +1390,12 @@ func ModelResult(name string, result Result) Result {
 			"completion_declaration_accepted", "completion_declaration_rejection",
 			"completion_declaration_error", "verification_evidence_accepted",
 			"verification_evidence_rejection", "replayed_from_call_id",
-			"citations", "diagnostics":
+			"citations", "diagnostics",
+			// Edit recovery facts must survive projection so the model can
+			// retry against the real current window even when the excerpt in
+			// the content was truncated by result admission.
+			"failed_change", "match_count", "start_line", "end_line",
+			"current_excerpt":
 			metadata[key] = value
 		case "session_id", "cursor", "running", "exit_code", "timed_out",
 			"tty", "archived", "pending_bytes", "omitted_bytes":

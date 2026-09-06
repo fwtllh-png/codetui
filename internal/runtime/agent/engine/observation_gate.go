@@ -77,7 +77,9 @@ func (e *Engine) observationGate(
 		Content: fmt.Sprintf(
 			"file_read requires a bounded window. Retry with "+
 				`{"path":%q,"start_line":%d}; `+
-				"read the located window and edit, do not page the rest of the file.",
+				"read the located window and edit, do not page the rest of "+
+				"the file. To recover prior read text, use turn_history or "+
+				"result_get instead of re-reading the file.",
 			path,
 			locatedLine,
 		),

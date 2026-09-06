@@ -87,6 +87,10 @@ func RecoverableFailure(err error) (string, bool) {
 				hint.FailedChange,
 				hint.MatchCount,
 			)
+			if hint.MatchCount > 1 {
+				content += "; extend old with more surrounding lines " +
+					"until it matches exactly once"
+			}
 		}
 		if hint.CurrentExcerpt != "" {
 			content += fmt.Sprintf(
@@ -95,6 +99,11 @@ func RecoverableFailure(err error) (string, bool) {
 				hint.EndLine,
 				hint.CurrentExcerpt,
 			)
+		} else if hint.FailedChange > 0 {
+			content += "; no similar location found: the old text is not " +
+				"present in the current file even ignoring whitespace. " +
+				"file_read the window and copy old exactly from the " +
+				"current content; do not reconstruct old from memory"
 		}
 		if len(hint.CandidatePaths) != 0 {
 			content += "; candidate_paths=" +

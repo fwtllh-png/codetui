@@ -124,6 +124,15 @@ func registerProcessProtocol(
 		Descriptor:  writeStdinDescriptor(),
 		Disposition: tool.DispositionWaitForTeardown,
 		Validate: func(input writeStdinInput) error {
+			if strings.TrimSpace(input.SessionID) == "" {
+				return errors.New(
+					"session_id is required: an empty id means the session " +
+						"has already ended; its final output was returned by " +
+						"the last poll and remains available through " +
+						"turn_history or result_get. Do not retry with an " +
+						"empty session_id",
+				)
+			}
 			_, yieldErr := processYield(
 				input.YieldTimeMS,
 				defaultInteractionWait,
@@ -201,6 +210,8 @@ func execCommandDescriptor() tool.Descriptor {
 			"for a process that outlives yield-time. yield-time_ms defaults to " +
 			"10000 and must not exceed 30000. timeout_ms, when set, kills the " +
 			"process group; it does not keep the first sample blocked. " +
+			"If the command starts a server or daemon it never exits: verify " +
+			"its startup output and close the session instead of polling for " +
 			"The workspace is read-only by default. write_paths permits only exact " +
 			"regular files whose parent directories already exist; it does not permit " +
 			"mkdir. To create files in missing directories, use file_write or " +
@@ -610,6 +621,20 @@ func (b *processOutputAccumulator) String() string {
 	) + string(b.tail)
 }
 
+// sessionLookupHint marks session-not-found failures so the model stops
+// re-polling a dead or mistyped session: the final output of an ended
+// session is durable and reachable through turn_history or result_get.
+func sessionLookupHint(err error) error {
+	if err == nil || !errors.Is(err, process.ErrSessionNotFound) {
+		return err
+	}
+	return tool.WithRecoveryHint(err, tool.RecoveryHint{
+		ErrorCategory:  "process_session_not_found",
+		RequiredAction: "use_turn_history",
+		RetryOriginal:  false,
+	})
+}
+
 func (p *commandProtocol) writeStdin(
 	ctx context.Context,
 	input writeStdinInput,
@@ -625,7 +650,7 @@ func (p *commandProtocol) writeStdin(
 	identity := tool.InvocationIdentityFrom(ctx)
 	threadID := identity.ThreadID
 	if input.Close {
-		if err := p.manager.Close(input.SessionID, threadID); err != nil {
+		if err := sessionLookupHint(p.manager.Close(input.SessionID, threadID)); err != nil {
 			return tool.Result{}, err
 		}
 		return tool.Result{
@@ -641,12 +666,12 @@ func (p *commandProtocol) writeStdin(
 		return tool.Result{}, errors.New("rows and cols must be supplied together")
 	}
 	if input.Rows != 0 {
-		if err := p.manager.Resize(
+		if err := sessionLookupHint(p.manager.Resize(
 			input.SessionID,
 			threadID,
 			input.Rows,
 			input.Cols,
-		); err != nil {
+		)); err != nil {
 			return tool.Result{}, err
 		}
 	}
@@ -655,16 +680,16 @@ func (p *commandProtocol) writeStdin(
 		if err != nil {
 			return tool.Result{}, err
 		}
-		if err := p.manager.Signal(input.SessionID, threadID, signal); err != nil {
+		if err := sessionLookupHint(p.manager.Signal(input.SessionID, threadID, signal)); err != nil {
 			return tool.Result{}, err
 		}
 	}
 	if input.Chars != "" {
-		if err := p.manager.Write(
+		if err := sessionLookupHint(p.manager.Write(
 			input.SessionID,
 			threadID,
 			[]byte(input.Chars),
-		); err != nil {
+		)); err != nil {
 			return tool.Result{}, err
 		}
 	}
@@ -675,7 +700,7 @@ func (p *commandProtocol) writeStdin(
 		yield,
 	)
 	if err != nil {
-		return tool.Result{}, err
+		return tool.Result{}, sessionLookupHint(err)
 	}
 	result := sessionResult(input.SessionID, wait, outputTokens)
 	if !wait.Running {

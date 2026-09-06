@@ -2,6 +2,8 @@ package result
 
 import (
 	"encoding/json"
+	"errors"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -128,5 +130,68 @@ func TestCollapseSurfacesBeforeRewritesOlderResultsOnly(t *testing.T) {
 	full, found := store.Get(oldProjected.Handle)
 	if !found || full != oldContent {
 		t.Fatalf("stored old result found=%t", found)
+	}
+}
+
+func editHintError(category string, matchCount int, excerpt string) error {
+	hint := tool.RecoveryHint{
+		ErrorCategory:  category,
+		RequiredAction: "file_read",
+		Path:           "pkg/node.cpp",
+		RetryOriginal:  false,
+		FailedChange:   1,
+		MatchCount:     matchCount,
+		StartLine:      74,
+		EndLine:        80,
+		CurrentExcerpt: excerpt,
+	}
+	return tool.WithRecoveryHint(
+		errors.New("old text matched "+strconv.Itoa(matchCount)+
+			" times, want exactly once"),
+		hint,
+	)
+}
+
+func TestRecoverableFailureAmbiguousMatchAdvisesWideningOld(t *testing.T) {
+	content, recoverable := RecoverableFailure(editHintError(
+		"edit_precondition_miss", 2, "current text",
+	))
+	if !recoverable {
+		t.Fatal("ambiguous edit failure is not recoverable")
+	}
+	if !strings.Contains(content, "match_count=2") ||
+		!strings.Contains(content,
+			"extend old with more surrounding lines") {
+		t.Fatalf("content = %q", content)
+	}
+}
+
+func TestRecoverableFailureWithoutExcerptAdvisesExactCopy(t *testing.T) {
+	content, recoverable := RecoverableFailure(editHintError(
+		"edit_precondition_miss", 0, "",
+	))
+	if !recoverable {
+		t.Fatal("miss edit failure is not recoverable")
+	}
+	if !strings.Contains(content, "no similar location found") ||
+		!strings.Contains(content, "copy old exactly") ||
+		strings.Contains(content, "current_excerpt_lines") {
+		t.Fatalf("content = %q", content)
+	}
+}
+
+func TestRecoverableFailureWithExcerptUnchanged(t *testing.T) {
+	content, recoverable := RecoverableFailure(editHintError(
+		"edit_precondition_miss", 0, "current text",
+	))
+	if !recoverable {
+		t.Fatal("excerpt edit failure is not recoverable")
+	}
+	if !strings.Contains(content, "current_excerpt_lines=74-80:\ncurrent text") {
+		t.Fatalf("content = %q", content)
+	}
+	if strings.Contains(content, "no similar location") ||
+		strings.Contains(content, "extend old") {
+		t.Fatalf("unexpected extra guidance: %q", content)
 	}
 }

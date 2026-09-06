@@ -641,7 +641,7 @@ func (m *SessionManager) get(id string) (*Session, error) {
 	session, exists := m.sessions[id]
 	m.mu.RUnlock()
 	if !exists {
-		return nil, errors.New("terminal session not found")
+		return nil, ErrSessionNotFound
 	}
 	return session, nil
 }
@@ -659,6 +659,10 @@ func (m *SessionManager) getOwned(id, threadID string) (*Session, error) {
 	}
 	return session, nil
 }
+
+// ErrSessionNotFound reports a session id that is not live in this manager.
+// It may already have exited and been reaped, or the id may be wrong.
+var ErrSessionNotFound = errors.New("terminal session not found")
 
 var ErrSessionOwnership = errors.New("terminal session ownership denied")
 
