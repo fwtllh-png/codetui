@@ -646,21 +646,23 @@ func (m *ThreadManager) ContextSnapshot(
 	return engine.ExportContextSnapshot()
 }
 
-func (m *ThreadManager) RunPostTurnNarrative(
-	ctx context.Context,
+func (m *ThreadManager) PreparePostTurnNarrative(
 	threadID protocol.ThreadID,
 	turnID protocol.TurnID,
-) (agentengine.NarrativeGenerationResult, error) {
+) (agentengine.PostTurnNarrativeRunner, error) {
 	adapter, err := m.forThread(threadID)
 	if err != nil {
-		return agentengine.NarrativeGenerationResult{}, err
+		return nil, err
 	}
 	engine := adapter.Underlying()
 	if engine == nil {
-		return agentengine.NarrativeGenerationResult{},
-			errors.New("context maintenance engine is unavailable")
+		return nil, errors.New("context maintenance engine is unavailable")
 	}
-	return engine.RunPostTurnNarrative(ctx, threadID, turnID)
+	prepared := engine.PreparePostTurnNarrative(threadID, turnID)
+	if prepared == nil {
+		return nil, nil
+	}
+	return prepared, nil
 }
 
 func (m *ThreadManager) RestoreContext(

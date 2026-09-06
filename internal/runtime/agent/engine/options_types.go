@@ -99,6 +99,11 @@ type LifecycleConfig struct {
 	// SessionForTurn reports the living session that owns a turn. The
 	// boolean is false when the turn or its session no longer exists.
 	SessionForTurn func(context.Context, string) (string, bool)
+	// TurnTranscriptArchive recovers the durable transcript of a closed turn
+	// whose raw history was removed from memory by compaction or
+	// replacement. turn_history consults it when the in-memory history no
+	// longer contains the turn.
+	TurnTranscriptArchive TurnTranscriptArchive
 }
 
 type Options struct {

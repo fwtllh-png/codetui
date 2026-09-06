@@ -279,6 +279,9 @@ func (e *Engine) CompactForcedDurable(
 	turnID protocol.TurnID,
 	focus string,
 ) (NarrativeGenerationResult, error) {
+	// Settle any pending post-turn narrative first so its digest cannot
+	// overwrite the compaction's own replacement window.
+	e.joinPendingNarrative()
 	e.mu.Lock()
 	e.resetViewFold()
 	source := cloneMessages(e.history)
@@ -500,6 +503,9 @@ func (e *Engine) History() []provider.Message {
 
 // ReplaceHistory installs a compacted replacement window as the model-visible history.
 func (e *Engine) ReplaceHistory(messages []provider.Message) {
+	// Settle any pending post-turn narrative first so its digest lands
+	// before the replacement window rather than racing it.
+	e.joinPendingNarrative()
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.resetViewFold()

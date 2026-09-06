@@ -260,7 +260,7 @@ func (b *seatbeltBackend) Prepare(ctx context.Context, command Command) (Command
 	if err := validateWorkspaceLinks(ctx, b.workspace); err != nil {
 		return Command{}, err
 	}
-	if err := auditSeatbeltSystemProfile(); err != nil {
+	if err := seatbeltSystemProfileAudit.run(); err != nil {
 		return Command{}, err
 	}
 	executable, err := resolveExecutableLiteral(command.Path, command.Env)
@@ -835,8 +835,8 @@ func writeSeatbeltAncestorMetadata(profile *strings.Builder, roots ...string) {
 	}
 }
 
-func auditSeatbeltSystemProfile() error {
-	const systemProfile = "/System/Library/Sandbox/Profiles/system.sb"
+// auditSeatbeltSystemProfileAt audits a Seatbelt system profile file.
+func auditSeatbeltSystemProfileAt(systemProfile string) error {
 	file, err := os.Open(systemProfile)
 	if err != nil {
 		return fmt.Errorf("open Seatbelt system profile: %w", err)
@@ -865,6 +865,44 @@ func auditSeatbeltSystemProfile() error {
 		return errors.New("Seatbelt system profile contains an unaudited active network rule")
 	}
 	return nil
+}
+
+// systemProfileAudit caches a successful audit keyed by the profile file's
+// size and modification time. The system profile is OS-owned; any content
+// change arrives with a stat change, so an unchanged stat preserves the
+// verdict. Failed audits are never cached.
+type systemProfileAudit struct {
+	path string
+
+	mu      sync.Mutex
+	size    int64
+	modTime time.Time
+	audited bool
+}
+
+func (a *systemProfileAudit) run() error {
+	info, err := os.Stat(a.path)
+	if err != nil {
+		return auditSeatbeltSystemProfileAt(a.path)
+	}
+	a.mu.Lock()
+	cached := a.audited && a.size == info.Size() &&
+		a.modTime.Equal(info.ModTime())
+	a.mu.Unlock()
+	if cached {
+		return nil
+	}
+	if err := auditSeatbeltSystemProfileAt(a.path); err != nil {
+		return err
+	}
+	a.mu.Lock()
+	a.size, a.modTime, a.audited = info.Size(), info.ModTime(), true
+	a.mu.Unlock()
+	return nil
+}
+
+var seatbeltSystemProfileAudit = &systemProfileAudit{
+	path: "/System/Library/Sandbox/Profiles/system.sb",
 }
 
 func stripSBPLDefinition(profile, prefix string) string {

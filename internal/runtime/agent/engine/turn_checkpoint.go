@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"context"
 	"strings"
 
 	"github.com/fwtllh-png/QCode/internal/adapter/provider"
@@ -13,11 +14,56 @@ func (e *Engine) registerTurnHistoryTool() error {
 	if e.options.Tools == nil {
 		return nil
 	}
-	return turnhistory.Register(e.options.Tools, e.lookupTurnHistory)
+	return turnhistory.Register(e.options.Tools, func(
+		ctx context.Context, turn uint64,
+	) ([]provider.Message, error) {
+		return e.lookupTurnHistory(ctx, turn)
+	})
 }
 
-func (e *Engine) lookupTurnHistory(turn uint64) ([]provider.Message, error) {
-	return agentcontext.MessagesForTurn(e.cloneHistoryForLookup(), turn), nil
+func (e *Engine) lookupTurnHistory(
+	ctx context.Context, turn uint64,
+) ([]provider.Message, error) {
+	if messages := agentcontext.MessagesForTurn(
+		e.cloneHistoryForLookup(), turn,
+	); len(messages) > 0 {
+		return messages, nil
+	}
+	return e.lookupArchivedTurn(ctx, turn)
+}
+
+// lookupArchivedTurn recovers a closed turn from the durable transcript
+// archive when compaction or replacement removed it from the in-memory
+// history. A missing archive, an unknown turn number, or an absent durable
+// transcript yields a nil slice so the tool reports the honest miss.
+func (e *Engine) lookupArchivedTurn(
+	ctx context.Context, turn uint64,
+) ([]provider.Message, error) {
+	archive, turnID := e.turnArchiveSource(turn)
+	if archive == nil || turnID == "" {
+		return nil, nil
+	}
+	history, err := archive.LookupTurn(ctx, turnID)
+	if err != nil {
+		return nil, err
+	}
+	return agentcontext.MessagesForTurn(history, turn), nil
+}
+
+func (e *Engine) turnArchiveSource(
+	turn uint64,
+) (TurnTranscriptArchive, string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.options.TurnTranscriptArchive == nil {
+		return nil, ""
+	}
+	for turnID, number := range e.turnIDs {
+		if number == turn && turnID != "" {
+			return e.options.TurnTranscriptArchive, turnID
+		}
+	}
+	return nil, ""
 }
 
 func (e *Engine) cloneHistoryForLookup() []provider.Message {

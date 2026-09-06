@@ -634,3 +634,99 @@ func (p *sourceEchoNarrativeProvider) Stream(
 		{Type: provider.EventMessageStop, StopReason: provider.StopReasonEndTurn},
 	}}, nil
 }
+
+func TestPreparePostTurnNarrativeJoinIsBounded(t *testing.T) {
+	runtime := &hangingSummaryProvider{
+		started: make(chan struct{}),
+		scriptedProvider: scriptedProvider{streams: []provider.Stream{
+			textStream("next sample"), textStream("next sample again"),
+		}},
+	}
+	engine := newEngine(t, runtime, tool.NewRegistry(nil, nil))
+	engine.options.Context.SemanticNarrative = "post_turn"
+	engine.options.Context.NarrativeTimeout = 40 * time.Millisecond
+	engine.options.Workspace = t.TempDir()
+	seedOmittedHistory(engine)
+
+	prepared := engine.PreparePostTurnNarrative("thread-1", "turn-1")
+	if prepared == nil {
+		t.Fatal("prepared narrative is nil for a completed turn")
+	}
+	settled := make(chan struct{})
+	go func() {
+		defer close(settled)
+		if _, err := prepared.Run(t.Context()); err != nil {
+			t.Error(err)
+		}
+	}()
+	select {
+	case <-runtime.started:
+	case <-time.After(time.Second):
+		t.Fatal("narrative provider was not entered")
+	}
+	// Execute joins the hanging narrative and waits for its settlement; the
+	// wait is bounded by the narrative timeout that unblocks the provider.
+	started := time.Now()
+	if _, err := engine.Run(t.Context(), "continue now", nil); err != nil {
+		t.Fatal(err)
+	}
+	if waited := time.Since(started); waited > time.Second {
+		t.Fatalf("next turn waited %s for hanging narrative", waited)
+	}
+	select {
+	case <-settled:
+	case <-time.After(time.Second):
+		t.Fatal("narrative did not settle within its timeout")
+	}
+	// The pending slot is released after settlement, so a follow-up turn
+	// starts without waiting.
+	started = time.Now()
+	if _, err := engine.Run(t.Context(), "continue again", nil); err != nil {
+		t.Fatal(err)
+	}
+	if waited := time.Since(started); waited > time.Second {
+		t.Fatalf("follow-up turn waited %s after narrative settled", waited)
+	}
+}
+
+func TestPreparePostTurnNarrativeSnapshotExcludesLaterTurns(t *testing.T) {
+	runtime := &sourceEchoNarrativeProvider{
+		scriptedProvider: scriptedProvider{streams: []provider.Stream{
+			textStream("first"), textStream("second"), textStream("third"),
+		}},
+	}
+	engine := newEngine(t, runtime, tool.NewRegistry(nil, nil))
+	engine.options.Context.SemanticNarrative = "post_turn"
+	engine.options.Context.NarrativeTimeout = 40 * time.Millisecond
+	engine.options.Workspace = t.TempDir()
+	seedOmittedHistory(engine)
+
+	prepared := engine.PreparePostTurnNarrative("thread-1", "turn-1")
+	if prepared == nil {
+		t.Fatal("prepared narrative is nil for a completed turn")
+	}
+	// A follow-up turn joins the pending narrative and then appends fresh
+	// history; the settled input must still be the prepared snapshot.
+	settled := make(chan struct{})
+	go func() {
+		defer close(settled)
+		if _, err := prepared.Run(t.Context()); err != nil {
+			t.Error(err)
+		}
+	}()
+	if _, err := engine.Run(t.Context(), "brand new request text", nil); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-settled:
+	case <-time.After(time.Second):
+		t.Fatal("narrative did not settle")
+	}
+	payload := runtime.lastPayload()
+	if !strings.Contains(payload, "I prefer deterministic state") {
+		t.Fatalf("snapshot lost the omitted history: %s", payload)
+	}
+	if strings.Contains(payload, "brand new request text") {
+		t.Fatalf("narrative snapshot captured a later turn: %s", payload)
+	}
+}

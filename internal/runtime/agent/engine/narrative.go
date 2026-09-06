@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/fwtllh-png/QCode/internal/adapter/model"
@@ -147,6 +148,111 @@ func (e *Engine) RunPostTurnNarrative(
 	return e.generatePostTurnDigest(ctx, threadID, turnID, "", nil)
 }
 
+// narrativeSnapshot is the narrative input captured while the finished turn
+// has settled and before the next turn appends to history.
+type narrativeSnapshot struct {
+	threadID    protocol.ThreadID
+	omitted     []provider.Message
+	truth       agentcontext.TruthCapsule
+	windowID    string
+	createdTurn uint64
+}
+
+// PostTurnNarrativeRunner settles a prepared post-turn narrative. It is the
+// narrow contract consumed by the Runtime sink.
+type PostTurnNarrativeRunner interface {
+	Run(context.Context) (NarrativeGenerationResult, error)
+}
+
+// PostTurnNarrative settles a completed turn's semantic narrative without
+// blocking the turn queue. Prepare captures the snapshot synchronously; Run
+// performs the provider sample and state settlement on any goroutine.
+type PostTurnNarrative struct {
+	engine   *Engine
+	snapshot narrativeSnapshot
+	done     chan struct{}
+	once     sync.Once
+	result   NarrativeGenerationResult
+	err      error
+}
+
+// Run settles the narrative exactly once and releases the engine's pending
+// join slot. It is bounded by the configured narrative timeout internally.
+func (p *PostTurnNarrative) Run(
+	ctx context.Context,
+) (NarrativeGenerationResult, error) {
+	p.once.Do(func() {
+		p.result, p.err = p.engine.settlePostTurnNarrative(ctx, p)
+	})
+	return p.result, p.err
+}
+
+// PreparePostTurnNarrative captures the narrative input for a completed turn
+// and registers a pending join so the next Execute waits for settlement. It
+// returns nil when the closed turn is canceled or failed and no narrative is
+// scheduled, matching the synchronous path.
+func (e *Engine) PreparePostTurnNarrative(
+	threadID protocol.ThreadID,
+	turnID protocol.TurnID,
+) *PostTurnNarrative {
+	if status, ok := e.closedTurnSealStatus(); ok &&
+		(status == agentcontext.CheckpointCanceled ||
+			status == agentcontext.CheckpointFailed) {
+		return nil
+	}
+	prepared := &PostTurnNarrative{
+		engine: e,
+		snapshot: e.captureNarrativeSnapshot(
+			threadID, nil,
+		),
+		done: make(chan struct{}),
+	}
+	e.narrativeMu.Lock()
+	e.pendingNarrative = prepared.done
+	e.narrativeMu.Unlock()
+	return prepared
+}
+
+// joinPendingNarrative waits for a narrative prepared by the previous turn so
+// its settlement lands before the next turn reads engine state. The runner is
+// internally bounded by the configured narrative timeout, so this wait is
+// bounded by the same budget the synchronous path paid; waiting unconditionally
+// (rather than racing a timer) keeps settlement and the next turn strictly
+// ordered.
+func (e *Engine) joinPendingNarrative() {
+	e.narrativeMu.Lock()
+	done := e.pendingNarrative
+	e.narrativeMu.Unlock()
+	if done == nil {
+		return
+	}
+	<-done
+}
+
+func (e *Engine) settlePostTurnNarrative(
+	ctx context.Context,
+	prepared *PostTurnNarrative,
+) (NarrativeGenerationResult, error) {
+	result, err := e.attemptNarrativeFromSnapshot(ctx, prepared.snapshot, "")
+	var artifact *agentcontext.NarrativeArtifact
+	if !result.Fallback && len(result.Artifact.Body.Items) > 0 {
+		copy := result.Artifact
+		artifact = &copy
+	}
+	e.sealClosedTurnMemory(
+		agentcontext.CheckpointCompleted,
+		artifact,
+		result.FailureReason,
+	)
+	e.narrativeMu.Lock()
+	if e.pendingNarrative == prepared.done {
+		close(prepared.done)
+		e.pendingNarrative = nil
+	}
+	e.narrativeMu.Unlock()
+	return result, err
+}
+
 func (e *Engine) generatePostTurnDigest(
 	ctx context.Context,
 	threadID protocol.ThreadID,
@@ -173,6 +279,31 @@ func (e *Engine) generatePostTurnDigest(
 	return result, err
 }
 
+// captureNarrativeSnapshot clones the narrative source, omitted window,
+// truth capsule, and turn identity under the engine lock.
+func (e *Engine) captureNarrativeSnapshot(
+	threadID protocol.ThreadID,
+	source []provider.Message,
+) narrativeSnapshot {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if source == nil {
+		source = cloneMessages(e.history)
+	} else {
+		source = cloneMessages(source)
+	}
+	return narrativeSnapshot{
+		threadID: threadID,
+		omitted: agentcontext.OmittedHistory(
+			source,
+			e.options.Context.RecentTailTurns,
+		),
+		truth:       e.buildTruthCapsule(e.buildCompactSummary(nil), nil),
+		windowID:    e.context.Window().ID,
+		createdTurn: e.turn,
+	}
+}
+
 func (e *Engine) attemptPostTurnDigest(
 	ctx context.Context,
 	threadID protocol.ThreadID,
@@ -180,29 +311,27 @@ func (e *Engine) attemptPostTurnDigest(
 	focus string,
 	source []provider.Message,
 ) (NarrativeGenerationResult, error) {
+	snapshot := e.captureNarrativeSnapshot(threadID, source)
+	return e.attemptNarrativeFromSnapshot(ctx, snapshot, focus)
+}
+
+func (e *Engine) attemptNarrativeFromSnapshot(
+	ctx context.Context,
+	snapshot narrativeSnapshot,
+	focus string,
+) (NarrativeGenerationResult, error) {
 	if e.options.Context.SemanticNarrative != "post_turn" {
 		return NarrativeGenerationResult{
 			Fallback: true, FailureReason: "disabled",
 		}, nil
 	}
-	e.mu.Lock()
-	if source == nil {
-		source = cloneMessages(e.history)
-	}
-	omitted := agentcontext.OmittedHistory(
-		source,
-		e.options.Context.RecentTailTurns,
-	)
-	truth := e.buildTruthCapsule(e.buildCompactSummary(nil), nil)
-	windowID := e.context.Window().ID
-	createdTurn := e.turn
-	e.mu.Unlock()
+	omitted := snapshot.omitted
 	if len(omitted) == 0 {
 		return NarrativeGenerationResult{
 			Fallback: true, FailureReason: "no_pending_input",
 		}, nil
 	}
-	authority, err := truth.AuthorityDigest()
+	authority, err := snapshot.truth.AuthorityDigest()
 	if err != nil {
 		return narrativeFallback(err.Error()), nil
 	}
@@ -211,8 +340,8 @@ func (e *Engine) attemptPostTurnDigest(
 		return narrativeFallback(err.Error()), nil
 	}
 	input, err := agentcontext.BuildNarrativeInput(
-		threadID,
-		windowID,
+		snapshot.threadID,
+		snapshot.windowID,
 		authority,
 		routeDigest,
 		omitted,
@@ -224,7 +353,7 @@ func (e *Engine) attemptPostTurnDigest(
 		return narrativeFallback(err.Error()), nil
 	}
 	generated, err := e.GenerateNarrative(
-		ctx, truth, input, createdTurn, focus,
+		ctx, snapshot.truth, input, snapshot.createdTurn, focus,
 	)
 	if err != nil {
 		return narrativeFallback(err.Error()), nil

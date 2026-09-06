@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	sessionhistory "github.com/fwtllh-png/QCode/internal/persist/history"
+	persiststate "github.com/fwtllh-png/QCode/internal/persist/state"
 
 	reverttool "github.com/fwtllh-png/QCode/internal/adapter/tool/revert"
 	"github.com/fwtllh-png/QCode/internal/observability/verify"
@@ -197,6 +198,14 @@ func (agentModule) Build(ctx context.Context, state *buildState) error {
 			sessionID, err := store.SessionForTurn(ctx, turnID)
 			return sessionID, err == nil && sessionID != ""
 		}
+		// turn_history falls back to the durable terminal envelopes when
+		// compaction removes closed turns from memory.
+		seedOptions.TurnTranscriptArchive = app.NewTurnTranscriptArchive(
+			persiststate.NewWorkspaceTerminalStore(
+				store.SQLite(), execution.Workspace,
+			),
+			persiststate.NewSharedContentStore(store.Content()),
+		)
 	}
 	defaultProfile := protocol.SessionProfile{
 		Version: protocol.SessionProfileVersion, Revision: 1,

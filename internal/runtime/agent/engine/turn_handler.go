@@ -25,6 +25,9 @@ func (e *Engine) Execute(
 	request TurnRequest,
 	emit func(Event) error,
 ) (result Result, resultErr error) {
+	// Join before taking e.mu: the pending narrative settles under e.mu, so
+	// waiting while holding it would deadlock with the settling goroutine.
+	e.joinPendingNarrative()
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	spec, persistedTurnID, err := e.prepareTurnSpec(

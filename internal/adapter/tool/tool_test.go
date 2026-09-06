@@ -688,3 +688,35 @@ func TestModelResultRetainsEditRecoveryFacts(t *testing.T) {
 		t.Fatalf("projected metadata retained runtime-only key: %#v", projected.Metadata)
 	}
 }
+
+func TestValidateArgumentsCachesCompiledSchema(t *testing.T) {
+	integerSchema := map[string]any{
+		"type":                 "object",
+		"properties":           map[string]any{"value": map[string]any{"type": "integer"}},
+		"required":             []any{"value"},
+		"additionalProperties": false,
+	}
+	for pass := 0; pass < 2; pass++ {
+		if err := ValidateArguments(integerSchema, json.RawMessage(`{"value":1}`)); err != nil {
+			t.Fatalf("pass %d: valid arguments rejected: %v", pass, err)
+		}
+		if err := ValidateArguments(integerSchema, json.RawMessage(`{"value":"no"}`)); err == nil {
+			t.Fatalf("pass %d: invalid arguments accepted", pass)
+		}
+	}
+	stringSchema := map[string]any{
+		"type":                 "object",
+		"properties":           map[string]any{"value": map[string]any{"type": "string"}},
+		"required":             []any{"value"},
+		"additionalProperties": false,
+	}
+	if err := ValidateArguments(stringSchema, json.RawMessage(`{"value":1}`)); err == nil {
+		t.Fatal("integer accepted against string schema")
+	}
+	if err := ValidateArguments(stringSchema, json.RawMessage(`{"value":"ok"}`)); err != nil {
+		t.Fatalf("string rejected against string schema: %v", err)
+	}
+	if err := ValidateArguments(integerSchema, json.RawMessage(`{"value":"ok"}`)); err == nil {
+		t.Fatal("string accepted against integer schema after cache reuse")
+	}
+}

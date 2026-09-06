@@ -1,6 +1,7 @@
 package turnhistory
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -11,7 +12,7 @@ import (
 
 func TestTurnHistoryReadsBoundedTurnAndIsIdempotentRegister(t *testing.T) {
 	registry := tool.NewRegistry(nil, nil)
-	lookup := func(turn uint64) ([]provider.Message, error) {
+	lookup := func(_ context.Context, turn uint64) ([]provider.Message, error) {
 		if turn != 2 {
 			return nil, nil
 		}
@@ -54,7 +55,7 @@ func TestTurnHistoryReadsBoundedTurnAndIsIdempotentRegister(t *testing.T) {
 
 func TestTurnHistoryFirstPagePrefersTailConclusions(t *testing.T) {
 	registry := tool.NewRegistry(nil, nil)
-	lookup := func(turn uint64) ([]provider.Message, error) {
+	lookup := func(_ context.Context, turn uint64) ([]provider.Message, error) {
 		return []provider.Message{
 			{
 				Role: provider.RoleUser, Turn: 1,

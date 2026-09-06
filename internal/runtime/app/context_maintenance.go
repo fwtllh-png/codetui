@@ -29,11 +29,37 @@ func (s *runtimeSink) publishPostTurnContextMaintenance(
 	if !ok {
 		return
 	}
-	result, err := maintenance.RunPostTurnNarrative(
-		context.Background(),
-		threadID,
-		turnID,
-	)
+	narrative, err := maintenance.PreparePostTurnNarrative(threadID, turnID)
+	if err != nil {
+		s.publishNarrativeMaintenance(
+			operationID, threadID, turnID, itemID,
+			agentengine.NarrativeGenerationResult{}, err,
+		)
+		return
+	}
+	if narrative == nil {
+		return
+	}
+	// The business terminal is already durable. Settle the non-authoritative
+	// narrative off the queue's critical path so queued turns drain now; the
+	// engine joins the pending narrative before its next turn starts, and a
+	// missing narrative falls back to deterministic truth plus the raw tail.
+	go func() {
+		result, runErr := narrative.Run(context.Background())
+		s.publishNarrativeMaintenance(
+			operationID, threadID, turnID, itemID, result, runErr,
+		)
+	}()
+}
+
+func (s *runtimeSink) publishNarrativeMaintenance(
+	operationID protocol.OperationID,
+	threadID protocol.ThreadID,
+	turnID protocol.TurnID,
+	itemID protocol.ItemID,
+	result agentengine.NarrativeGenerationResult,
+	err error,
+) {
 	var data *protocol.TurnCompactionData
 	switch {
 	case err != nil:

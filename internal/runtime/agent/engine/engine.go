@@ -76,28 +76,30 @@ func (noopMetrics) TurnKernelObserver(bool, bool) {}
 // sinks) sit below the Engine locks: Engine locks may be held across calls
 // into them, but their callbacks must never re-enter an Engine or Scope lock.
 type Engine struct {
-	mu              sync.Mutex
-	scopeMu         sync.Mutex
-	options         Options
-	history         []provider.Message
-	viewFold        viewFoldState
-	mailboxHold     []PendingInput
-	turn            uint64
-	usage           provider.Usage
-	costUSD         float64
-	sessionRevision uint64
-	stateEpoch      uint64
-	appliedDeltas   map[string]string
-	guard           *toolguard.Guard
-	journal         *workspacejournal.Manager
-	turnIDs         map[string]uint64
-	historyTurns    map[string]uint64
-	planMu          sync.Mutex
-	planText        string
-	plan            interact.Plan
-	planReceipt     *promptcontext.Receipt
-	checkpointMu    sync.Mutex
-	turnCheckpoints []agentcontext.TurnCheckpoint
+	mu               sync.Mutex
+	scopeMu          sync.Mutex
+	options          Options
+	history          []provider.Message
+	viewFold         viewFoldState
+	mailboxHold      []PendingInput
+	turn             uint64
+	usage            provider.Usage
+	costUSD          float64
+	sessionRevision  uint64
+	stateEpoch       uint64
+	appliedDeltas    map[string]string
+	guard            *toolguard.Guard
+	journal          *workspacejournal.Manager
+	turnIDs          map[string]uint64
+	historyTurns     map[string]uint64
+	planMu           sync.Mutex
+	planText         string
+	plan             interact.Plan
+	planReceipt      *promptcontext.Receipt
+	checkpointMu     sync.Mutex
+	turnCheckpoints  []agentcontext.TurnCheckpoint
+	narrativeMu      sync.Mutex
+	pendingNarrative chan struct{}
 
 	context         agentcontext.Authority
 	prefixMu        sync.Mutex

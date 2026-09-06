@@ -13,7 +13,7 @@ import (
 
 const Name = agentcontext.TurnHistoryToolName
 
-type Lookup func(turn uint64) ([]provider.Message, error)
+type Lookup func(ctx context.Context, turn uint64) ([]provider.Message, error)
 
 type input struct {
 	Turn     uint64 `json:"turn"`
@@ -74,8 +74,8 @@ func Register(registry *tool.Registry, lookup Lookup) error {
 			}
 			return nil
 		},
-		Run: func(_ context.Context, value input) (tool.Result, error) {
-			messages, err := lookup(value.Turn)
+		Run: func(ctx context.Context, value input) (tool.Result, error) {
+			messages, err := lookup(ctx, value.Turn)
 			if err != nil {
 				return tool.Result{}, err
 			}

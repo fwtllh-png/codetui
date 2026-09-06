@@ -206,7 +206,7 @@ func TestBackendProfilesNeverAdmitHostRoot(t *testing.T) {
 		}
 	}
 	if runtime.GOOS == "darwin" {
-		if err := auditSeatbeltSystemProfile(); err != nil {
+		if err := seatbeltSystemProfileAudit.run(); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -865,5 +865,50 @@ func TestValidateWorkspaceLinksHonorsCancellation(t *testing.T) {
 	cancel()
 	if err := validateWorkspaceLinks(ctx, workspace); !errors.Is(err, context.Canceled) {
 		t.Fatalf("canceled validation error = %v", err)
+	}
+}
+
+func TestSystemProfileAuditCachesByStat(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "system.sb")
+	if err := os.WriteFile(
+		path, []byte("(define (seatbelt-ext))"), 0o644,
+	); err != nil {
+		t.Fatal(err)
+	}
+	audit := &systemProfileAudit{path: path}
+	if err := audit.run(); err != nil {
+		t.Fatal(err)
+	}
+
+	// A cached verdict short-circuits without reopening the file.
+	if err := os.Chmod(path, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	if err := audit.run(); err != nil {
+		t.Fatalf("cached audit reopened the profile: %v", err)
+	}
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// A content change invalidates the cached verdict.
+	if err := os.WriteFile(
+		path, []byte("(allow file-read*)"), 0o644,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := audit.run(); err == nil {
+		t.Fatal("stale audit verdict survived a content change")
+	}
+
+	// Failed audits are never cached.
+	if err := os.WriteFile(
+		path, []byte("(define (seatbelt-ext))"), 0o644,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := audit.run(); err != nil {
+		t.Fatalf("audit did not recover after content was fixed: %v", err)
 	}
 }

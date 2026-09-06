@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"io"
 	"maps"
-	"net/http"
 	"path/filepath"
 	"reflect"
 	"sort"
@@ -717,14 +716,6 @@ func (r *Registry) validateBindingLocked(
 		return fmt.Errorf("%w for tool %q: execution authority changed", ErrCatalogStale, name)
 	}
 	if item.revision != binding.Revision {
-		// #region debug-point C:stale-binding
-		if name == "file_read" {
-			body, _ := json.Marshal(map[string]any{"sessionId": "tool-catalog-stale", "runId": "post-fix", "hypothesisId": "C", "location": "internal/adapter/tool/tool.go:validateBindingLocked", "msg": "[DEBUG] stale file_read binding rejected", "data": map[string]any{"sampled_revision": binding.Revision, "current_revision": item.revision, "sampled_generation": binding.Generation, "current_generation": r.generation, "source": item.source}})
-			if response, reportErr := http.Post("http://127.0.0.1:7777/event", "application/json", bytes.NewReader(body)); reportErr == nil {
-				_ = response.Body.Close()
-			}
-		}
-		// #endregion
 		return fmt.Errorf(
 			"%w for tool %q: sampled revision=%d current=%d",
 			ErrCatalogStale, name, binding.Revision, item.revision,
@@ -926,6 +917,38 @@ func ValidateDescriptor(descriptor Descriptor) error {
 	return validateDescriptor(descriptor)
 }
 
+// compiledSchemaCache caches compiled argument schemas keyed by the sha256 of
+// the marshaled schema. Schemas come from registry-frozen descriptors and are
+// content-addressed and immutable, so the working set is bounded by the
+// distinct schemas observed over the process lifetime; compilation for an
+// identical schema is deterministic and Validate is safe for concurrent use.
+var compiledSchemaCache sync.Map // [sha256.Size]byte -> *jsonschema.Schema
+
+func compileArgumentsSchema(schema map[string]any) (*jsonschema.Schema, error) {
+	data, err := json.Marshal(schema)
+	if err != nil {
+		return nil, fmt.Errorf("encode schema: %w", err)
+	}
+	key := sha256.Sum256(data)
+	if cached, ok := compiledSchemaCache.Load(key); ok {
+		return cached.(*jsonschema.Schema), nil
+	}
+	var schemaValue any
+	if err := json.Unmarshal(data, &schemaValue); err != nil {
+		return nil, fmt.Errorf("decode schema: %w", err)
+	}
+	compiler := jsonschema.NewCompiler()
+	if err := compiler.AddResource("tool-schema.json", schemaValue); err != nil {
+		return nil, fmt.Errorf("compile schema resource: %w", err)
+	}
+	compiled, err := compiler.Compile("tool-schema.json")
+	if err != nil {
+		return nil, fmt.Errorf("compile schema: %w", err)
+	}
+	compiledSchemaCache.Store(key, compiled)
+	return compiled, nil
+}
+
 func ValidateArguments(schema map[string]any, raw json.RawMessage) error {
 	var value any
 	decoder := json.NewDecoder(bytes.NewReader(raw))
@@ -937,21 +960,9 @@ func ValidateArguments(schema map[string]any, raw json.RawMessage) error {
 	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
 		return invalidArguments(errors.New("multiple JSON values"))
 	}
-	compiler := jsonschema.NewCompiler()
-	data, err := json.Marshal(schema)
+	compiled, err := compileArgumentsSchema(schema)
 	if err != nil {
-		return fmt.Errorf("encode schema: %w", err)
-	}
-	var schemaValue any
-	if err := json.Unmarshal(data, &schemaValue); err != nil {
-		return fmt.Errorf("decode schema: %w", err)
-	}
-	if err := compiler.AddResource("tool-schema.json", schemaValue); err != nil {
-		return fmt.Errorf("compile schema resource: %w", err)
-	}
-	compiled, err := compiler.Compile("tool-schema.json")
-	if err != nil {
-		return fmt.Errorf("compile schema: %w", err)
+		return err
 	}
 	if err := compiled.Validate(value); err != nil {
 		return invalidArguments(err)
