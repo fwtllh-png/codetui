@@ -251,9 +251,9 @@ func execCommandDescriptor() tool.Descriptor {
 		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"command":       map[string]any{"type": "string"},
-				"cwd":           map[string]any{"type": "string"},
-				"tty":           map[string]any{"type": "boolean"},
+				"command": map[string]any{"type": "string"},
+				"cwd":     map[string]any{"type": "string"},
+				"tty":     map[string]any{"type": "boolean"},
 				"yield_time_ms": map[string]any{
 					"type":        "integer",
 					"description": "Maximum time the first sample waits for exit. Still-running commands return session_id for write_stdin.",
@@ -293,8 +293,13 @@ func writeStdinDescriptor() tool.Descriptor {
 	return tool.Descriptor{
 		Name: "write_stdin",
 		Description: "Continue an exec_command session: poll output, write chars, " +
-			"resize its TTY, signal it, or close it. yield_time_ms defaults " +
-			"to 5000 and must not exceed 30000.",
+			"resize its TTY, signal it, or close it. The call returns as soon " +
+			"as new output arrives or the process exits. yield_time_ms " +
+			"defaults to 5000 and must not exceed 30000; while a session " +
+			"stays silent and running, an undeclared wait keeps extending " +
+			"in windows up to the 30000 cap before reporting still-running, " +
+			"so long silent builds do not need one poll per window. Declare " +
+			"yield_time_ms for an exact bounded wait.",
 		DiscoveryTerms: []string{"process output", "terminal input", "进程输出", "终端输入"},
 		Visibility:     tool.VisibleModel,
 		Capability:     tool.CapabilityProcess,
@@ -310,9 +315,14 @@ func writeStdinDescriptor() tool.Descriptor {
 		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"session_id":    map[string]any{"type": "string"},
-				"chars":         map[string]any{"type": "string"},
-				"yield_time_ms": map[string]any{"type": "integer"},
+				"session_id": map[string]any{"type": "string"},
+				"chars":      map[string]any{"type": "string"},
+				"yield_time_ms": map[string]any{
+					"type": "integer",
+					"description": "Exact maximum wait in ms for new output. " +
+						"Omit to keep waiting up to the 30000 cap while the " +
+						"session stays silent.",
+				},
 				"output_tokens": map[string]any{"type": "integer"},
 				"rows":          map[string]any{"type": "integer"},
 				"cols":          map[string]any{"type": "integer"},
@@ -575,6 +585,62 @@ func (p *commandProtocol) waitInitial(
 	}
 }
 
+// waitSessionOutput continues a session with quiet-window semantics: it
+// returns when the process exits, when a full window passes without new
+// output after some was delivered, or at the public yield cap. A silent
+// running session keeps extending toward that cap — it has nothing to
+// report, and returning early would only manufacture a re-poll round
+// trip. While output keeps arriving inside a window the call keeps
+// collecting, so chatty builds batch into one result instead of one model
+// round trip per chunk. A caller-declared yield_time_ms bypasses this loop
+// and is honored exactly.
+func (p *commandProtocol) waitSessionOutput(
+	ctx context.Context,
+	id string,
+	threadID string,
+	window time.Duration,
+	outputLimit int,
+) (process.SessionWait, *processOutputAccumulator, error) {
+	deadline := time.Now().Add(maxProcessYield)
+	combined := newProcessOutputAccumulator(outputLimit)
+	var aggregate process.SessionWait
+	for {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			wait, err := p.manager.WaitNext(ctx, id, threadID, 0)
+			if err != nil {
+				return process.SessionWait{}, combined, err
+			}
+			combined.WriteString(wait.Data)
+			aggregate = wait
+			aggregate.Data = combined.String()
+			aggregate.TimedOut = wait.Running
+			return aggregate, combined, nil
+		}
+		hadData := combined.total > 0
+		wait, err := p.manager.WaitNext(
+			ctx, id, threadID, min(window, remaining),
+		)
+		if err != nil {
+			return process.SessionWait{}, combined, err
+		}
+		combined.WriteString(wait.Data)
+		aggregate = wait
+		aggregate.Data = combined.String()
+		if !wait.Running {
+			aggregate.TimedOut = false
+			return aggregate, combined, nil
+		}
+		if wait.Data == "" {
+			if hadData {
+				aggregate.TimedOut = true
+				return aggregate, combined, nil
+			}
+			continue
+		}
+	}
+}
+
 type processOutputAccumulator struct {
 	limit int
 	head  []byte
@@ -693,16 +759,34 @@ func (p *commandProtocol) writeStdin(
 			return tool.Result{}, err
 		}
 	}
-	wait, err := p.manager.WaitNext(
-		ctx,
-		input.SessionID,
-		threadID,
-		yield,
-	)
+	var wait process.SessionWait
+	var collected *processOutputAccumulator
+	if input.YieldTimeMS > 0 {
+		wait, err = p.manager.WaitNext(
+			ctx,
+			input.SessionID,
+			threadID,
+			yield,
+		)
+	} else {
+		wait, collected, err = p.waitSessionOutput(
+			ctx, input.SessionID, threadID, yield, outputTokens*4,
+		)
+	}
 	if err != nil {
 		return tool.Result{}, sessionLookupHint(err)
 	}
 	result := sessionResult(input.SessionID, wait, outputTokens)
+	if collected != nil {
+		if omitted := collected.Omitted(); omitted > 0 {
+			result.Metadata["omitted_bytes"] = omitted
+		}
+	}
+	if wait.TimedOut && wait.Running {
+		result.Metadata["error_category"] = "process_still_running"
+		result.Metadata["required_action"] = "write_stdin"
+		result.Metadata["retry_original"] = false
+	}
 	if !wait.Running {
 		teardownStarted := time.Now()
 		closeErr := p.manager.Close(input.SessionID, threadID)

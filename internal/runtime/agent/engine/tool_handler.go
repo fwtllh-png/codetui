@@ -49,7 +49,13 @@ func (e *Engine) runToolsWithCache(
 	}
 	toolCtx, cancel := context.WithCancelCause(tool.WithInvocationIdentity(ctx, identity))
 	toolCtx = tool.WithInvocationSource(toolCtx, tool.InvocationSourceModel)
-	resultBudget := max(uint64(1), e.autoCompactLimit()/uint64(max(1, len(calls))))
+	// The per-result ceiling guides producer pre-clamping and bounds any
+	// single projection; the batch total is the aggregate pool the batch
+	// admission redistributes by real result size. Both derive from the same
+	// authorities as the previous equal split, whose aggregate ceiling was
+	// exactly this total.
+	resultBudget := max(uint64(1), e.autoCompactLimit())
+	batchBudget := resultBudget
 	scope := e.executionScope()
 	if scope == nil {
 		cancel(nil)
@@ -60,12 +66,13 @@ func (e *Engine) runToolsWithCache(
 	surfaceItemBytes := scope.state.toolSurfaceItemBytes
 	scope.mu.Unlock()
 	if surfaceItemBytes > 0 && surfaceMaxBytes > 0 {
-		batchItemBytes := surfaceMaxBytes / max(1, len(calls))
-		surfaceBytes := min(surfaceItemBytes, max(1, batchItemBytes))
-		surfaceTokens := uint64((surfaceBytes + 3) / 4)
-		resultBudget = min(resultBudget, max(uint64(1), surfaceTokens))
+		itemTokens := max(uint64(1), uint64((surfaceItemBytes+3)/4))
+		totalTokens := max(uint64(1), uint64((surfaceMaxBytes+3)/4))
+		resultBudget = min(resultBudget, itemTokens)
+		batchBudget = min(batchBudget, totalTokens)
 	}
 	toolCtx = tool.WithResultTokenBudget(toolCtx, min(e.options.Tools.ResultTokenCapacity(), resultBudget))
+	toolCtx = tool.WithResultBatchBudget(toolCtx, batchBudget)
 
 	toolCtx = withToolAccount(toolCtx, &toolAccount{
 		engine: e,

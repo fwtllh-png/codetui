@@ -99,9 +99,15 @@ func (s *RuntimeKernel) ExecuteToolEffect(
 		FailureCategory: effect.FailureCategory,
 	})
 	results := batch.Results
-	for index := range results {
-		results[index], _ = effect.Registry.AdmitResultWithin(effect.Calls[index].Name, results[index], tool.ResultTokenBudget(effect.Context))
+	names := make([]string, len(effect.Calls))
+	for index, call := range effect.Calls {
+		names[index] = call.Name
 	}
+	results = effect.Registry.AdmitBatchWithin(
+		names, results,
+		tool.ResultTokenBudget(effect.Context),
+		tool.ResultBatchBudget(effect.Context),
+	)
 	batchMutated := false
 	for _, result := range results {
 		if len(ObservedFileChanges(result)) != 0 {

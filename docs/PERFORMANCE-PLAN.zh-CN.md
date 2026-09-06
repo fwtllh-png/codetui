@@ -2,7 +2,7 @@
 
 | 项 | 内容 |
 | --- | --- |
-| 状态 | P0 已实施（见第 7 节实施记录）；P1/P2 未实施 |
+| 状态 | P0 已实施（见第 7 节）；P1-1、P1-2、P1-3 已实施（见第 7 节）；其余 P1/P2 未实施 |
 | 日期 | 2026-09-06 |
 | 基线 | 当前 `main`（bc7c94dc）+ 工作区未提交改动 |
 | 范围 | Runtime 任务推进速度、采样轮次效率、上下文保持 |
@@ -332,3 +332,93 @@ transcripts"的委托契约——只共享文件事实，不共享对话。
 （adapter/tool、adapter/tool/turnhistory、runtime/agent/engine、runtime/app、
 runtime/app/wire、security/sandbox、persist/artifact）、`scripts/check-docs.sh`
 全部通过。
+
+### P1-1 实施记录（2026-09-06）
+
+工具结果预算从"每结果均摊"改为"按需分配 + 批次总量约束"：
+
+- **每项上限**（`ResultTokenBudget`，供生产端预裁与单项兜底）：
+  `min(autoCompactLimit, surfaceItemTokens, ResultStore 容量)`——去掉
+  `/len(calls)` 均摊；`surfaceItemBytes` 按其命名本义用作每项上限
+  （`ToolSurfaceBudget` 与 `dynamicToolResultSurfaceBytes` 的既有语义一致）。
+- **批次总量**（新增 `ResultBatchBudget` ctx 值）：
+  `min(autoCompactLimit, surfaceMaxTokens)`——与旧均摊的聚合上限
+  `N × (总量/N)` 完全相等，模型可见表面预算的总量契约不变。
+- **分配算法**（`ResultStore.AdmitBatchWithin`，max-min 水位线）：批次执行
+  完成后按真实大小升序分配——小于当前水位线的结果全额内联并归还余量，
+  超过的在水位线处 spill（截断通知 + `result_get` handle 的既有机制）。
+  全大结果批次退化到与旧均摊完全相同的每份份额；混合批次中小结果不再
+  浪费配额、大结果获得回收份额。
+- **接入点**：`turnkernel/tool_effect.go` 的批次后准入循环改为一次
+  `Registry.AdmitBatchWithin`；`engine/tool_handler.go` 设置双预算；
+  单结果兜底路径（批次中止等）仍走 `AdmitResultWithin`。
+- **幂等安全**：历史重放准入（`admitToolResultHistory`）以全量
+  `autoCompactLimit` 校验既有 receipt，池化分配的配额恒 ≤ 该值，
+  不会被下一轮采样回裁。
+- **行为保持**：N=1 批次、既有经济表面预算测试
+  （`TestRunToolsEnforcesRecordedEconomicSurfaceBudget`）语义不变；
+  生产端（search 族）的 ctx 预算从均摊值提高到每项上限，模型声明的
+  `max_results/max_file_bytes` 被更忠实地执行，超量部分在准入层以
+  spill+handle（可找回）替代列表截断（不可找回）。
+- 新增测试：池化分配单元测试四例（混合批次回收、全大批次与均摊等价、
+  零总量回退、每项上限约束）与引擎级混合批次端到端测试
+  （`TestRunToolsPoolAdmitsMixedBatchByDemand`）。
+
+### P1-2 实施记录（2026-09-06）
+
+长命令自动续接（`write_stdin` 安静窗口语义）：
+
+- **调研修正**：计划中"Runtime 后台持续收集输出"这半在现有架构中已经
+  成立——session 的输出由后台泵持续写入 archive，`WaitNext` 以交付游标
+  返回自上次以来的全部增量。实际缺口在等待窗口语义：默认 5 秒窗口把
+  静默长构建变成"每 5 秒一次模型轮询"，且数据到达即返回时进程往往
+  尚未回收（`running=true` + 内容已到），又制造一轮确认轮询；持续
+  输出型构建则是每块输出一轮采样。
+- **实现**（`internal/adapter/tool/shell/protocol.go`）：
+  `write_stdin` 在**未声明 `yield_time_ms`** 时启用 `waitSessionOutput`
+  安静窗口语义——持有会话直到三者之一：进程退出；输出到达后再安静
+  满一个窗口（默认 5000ms）；到达公共上限 30000ms（`maxProcessYield`，
+  既有公开常量，未新增阈值）。窗口内持续到达的输出经 head+tail 累积器
+  合并为单条结果（受 `output_tokens` 截断约束并上报
+  `omitted_bytes`）。
+- **声明路径不变**：模型显式声明 `yield_time_ms` 时保持单窗口精确等待
+  （原契约逐字尊重）；`exec_command` 的首等待语义按计划要求未改动。
+- **提示补齐**：安静超时返回附带 `process_still_running` /
+  `required_action=write_stdin` / `retry_original=false` 元数据，与
+  exec_command 的仍运行提示一致。
+- **生命周期对齐**：ctx 取消即时传播（`Wait` select ctx.Done）、
+  `timeout_ms` 杀进程组后 `Wait` 返回退出态、退出自动 `Close` 会话，
+  均未改变；同一会话的并发 `write_stdin` 仍由 `deliveryMu` 串行
+  （等待上限从 5s 提高到 30s）。
+- **量化预期**：3 分钟静默构建的轮询从约 36 次降到约 6 次；"输出后
+  即退出"的命令不再需要额外一轮确认轮询。
+- 新增测试三例：5.3 秒后退出的静默进程被扩展等待直接捕获退出、
+  声明 100ms 窗口精确生效（含提示元数据断言）、0.25 秒到达的输出
+  快速返回且合并退出态。
+
+### P1-3 实施记录（2026-09-06）
+
+采样并发从权威能力派生：
+
+- **调研修正**：`execution.max_concurrent`（默认 8，TOML、
+  `QCODE_MAX_CONCURRENT` 与启动覆盖三通道，校验为正，provenance 完整）
+  **已经是运维声明的 Provider 并发合同**，此前只接到 Provider HTTP 客户端
+  一层；会话级 `SharedRateLimit` 硬编码容量 1 压在其上，使声明的并发从未
+  生效。原分析的"容量恒为 1"实为声明与实现不一致，而非保守默认——因此
+  无需新增任何配置字段。
+- **实现**：`NewSharedRateLimit(concurrency)` 容量从
+  `execution.max_concurrent` 派生（`<1` 回退单飞）；采样门与 HTTP 客户端
+  在两个层面执行同一声明值。
+- **共享冷却语义原样保留**：任一采样 429 后 `Record` 设置全局
+  `cooldownUntil`，全部并发槽的后续 `Acquire` 等待冷却结束
+  （`TestSharedRateLimitCooldownFreezesAllSlots` 锁定）；`Hot()` 驱动的
+  Subagent spawn 准入、`BeginUserTurn` 保留剩余冷却等行为不变。
+- **声明为 1 时与改造前完全一致**：原 serialization 测试保留为
+  `limit=1` 用例；并发测试以 3 引擎/容量 2 验证第 3 个采样等待
+  （`TestSharedRateLimitAdmitsDeclaredConcurrency`）。
+- **计划第二项经核实已是现状**：summary/narrative 采样直接走 Provider、
+  不经过采样门（P0-5 实施时已验证），并有独立的
+  `summaryRouteCooldown`——429 冷却不跨路由全局冻结，无需改动。
+- **风险控制**：并发上限即显式配置本身（未引入任何新阈值）；route 级
+  `rate_limit` RPS 平面与 TPM 准入平面不变，仍按 Provider 反馈动态限流。
+- 配置文档已补充 `execution.max_concurrent` 的双层语义说明。

@@ -59,6 +59,20 @@ func ResultTokenBudget(ctx context.Context) uint64 {
 	return tokens
 }
 
+type resultBatchBudgetKey struct{}
+
+// WithResultBatchBudget records the aggregate admission pool shared by the
+// results of one tool batch. Producers keep reading ResultTokenBudget for the
+// per-result ceiling; only batch admission consumes this total.
+func WithResultBatchBudget(ctx context.Context, tokens uint64) context.Context {
+	return context.WithValue(ctx, resultBatchBudgetKey{}, tokens)
+}
+
+func ResultBatchBudget(ctx context.Context) uint64 {
+	tokens, _ := ctx.Value(resultBatchBudgetKey{}).(uint64)
+	return tokens
+}
+
 const (
 	InvocationSourceUnknown  InvocationSource = "unknown"
 	InvocationSourceModel    InvocationSource = "model"

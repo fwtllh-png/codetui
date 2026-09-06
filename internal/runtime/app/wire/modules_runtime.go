@@ -67,7 +67,10 @@ func (agentModule) Build(ctx context.Context, state *buildState) error {
 		return err
 	}
 	modelCapabilities := route.Model().Capabilities
-	sharedRateLimit := agentengine.NewSharedRateLimit()
+	// The sample gate capacity is the operator-declared provider concurrency
+	// (execution.max_concurrent) — the same ceiling the provider HTTP client
+	// enforces below this gate.
+	sharedRateLimit := agentengine.NewSharedRateLimit(execution.MaxConcurrent)
 	if state.orchestration.subagents != nil {
 		state.orchestration.subagents.BindProviderGate(sharedRateLimit.Hot)
 	}

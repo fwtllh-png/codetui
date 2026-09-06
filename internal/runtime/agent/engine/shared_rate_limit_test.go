@@ -11,7 +11,7 @@ import (
 )
 
 func TestSharedRateLimitAcquireWaitsForCooldown(t *testing.T) {
-	shared := NewSharedRateLimit()
+	shared := NewSharedRateLimit(1)
 	shared.Record(40 * time.Millisecond)
 	started := time.Now()
 	release, err := shared.Acquire(t.Context())
@@ -25,7 +25,7 @@ func TestSharedRateLimitAcquireWaitsForCooldown(t *testing.T) {
 }
 
 func TestSharedRateLimitAcquireCancels(t *testing.T) {
-	shared := NewSharedRateLimit()
+	shared := NewSharedRateLimit(1)
 	held, err := shared.Acquire(t.Context())
 	if err != nil {
 		t.Fatal(err)
@@ -44,7 +44,7 @@ func TestSharedRateLimitAcquireCancels(t *testing.T) {
 }
 
 func TestSharedRateLimitBeginUserTurnKeepsCooldown(t *testing.T) {
-	shared := NewSharedRateLimit()
+	shared := NewSharedRateLimit(1)
 	shared.Record(time.Hour)
 	shared.BeginUserTurn()
 	retries, waited := shared.Load()
@@ -60,12 +60,15 @@ func TestSharedRateLimitBeginUserTurnKeepsCooldown(t *testing.T) {
 	}
 }
 
+// TestSharedRateLimitSerializesProviderSamples locks the gate to one slot
+// and keeps the historical single-flight guarantee for operators that
+// declare max_concurrent = 1.
 func TestSharedRateLimitSerializesProviderSamples(t *testing.T) {
 	runtime := &blockingProvider{
 		started: make(chan struct{}, 2),
 		release: make(chan struct{}),
 	}
-	shared := NewSharedRateLimit()
+	shared := NewSharedRateLimit(1)
 	first := newEngine(t, runtime, tool.NewRegistry(nil, nil))
 	second := newEngine(t, runtime, tool.NewRegistry(nil, nil))
 	first.options.SharedRateLimit = shared
@@ -146,4 +149,78 @@ func (p *blockingProvider) maxInFlight() int {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.max
+}
+
+func TestSharedRateLimitAdmitsDeclaredConcurrency(t *testing.T) {
+	runtime := &blockingProvider{
+		started: make(chan struct{}, 4),
+		release: make(chan struct{}),
+	}
+	shared := NewSharedRateLimit(2)
+	engines := make([]*Engine, 3)
+	for index := range engines {
+		engines[index] = newEngine(t, runtime, tool.NewRegistry(nil, nil))
+		engines[index].options.SharedRateLimit = shared
+	}
+	done := make([]chan error, len(engines))
+	for index, engine := range engines {
+		done[index] = make(chan error, 1)
+		go func(index int, engine *Engine) {
+			_, err := engine.Run(t.Context(), "sample", nil)
+			done[index] <- err
+		}(index, engine)
+	}
+	for range 2 {
+		select {
+		case <-runtime.started:
+		case <-time.After(2 * time.Second):
+			t.Fatal("declared concurrency did not admit two samples")
+		}
+	}
+	// The third sample waits for a slot while the first two stay in flight.
+	select {
+	case <-runtime.started:
+		t.Fatal("third sample exceeded the declared concurrency")
+	case <-time.After(50 * time.Millisecond):
+	}
+	if runtime.maxInFlight() != 2 {
+		t.Fatalf("in-flight samples = %d, want 2", runtime.maxInFlight())
+	}
+	close(runtime.release)
+	for _, channel := range done {
+		if err := <-channel; err != nil {
+			t.Fatalf("sample: %v", err)
+		}
+	}
+	if runtime.maxInFlight() != 2 {
+		t.Fatalf("concurrent samples overlapped beyond the gate: %d", runtime.maxInFlight())
+	}
+}
+
+func TestSharedRateLimitCooldownFreezesAllSlots(t *testing.T) {
+	shared := NewSharedRateLimit(4)
+	shared.Record(40 * time.Millisecond)
+	started := time.Now()
+	release, err := shared.Acquire(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	release()
+	if time.Since(started) < 30*time.Millisecond {
+		t.Fatal("cooldown did not gate an open slot")
+	}
+}
+
+func TestSharedRateLimitZeroConcurrencyKeepsSingleFlight(t *testing.T) {
+	shared := NewSharedRateLimit(0)
+	held, err := shared.Acquire(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-shared.token:
+		t.Fatal("zero concurrency admitted a second sample")
+	default:
+	}
+	held()
 }

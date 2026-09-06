@@ -720,3 +720,88 @@ func TestValidateArgumentsCachesCompiledSchema(t *testing.T) {
 		t.Fatal("string accepted against integer schema after cache reuse")
 	}
 }
+
+func batchResultContent(units int) string {
+	return strings.Repeat("a", units*4)
+}
+
+func TestAdmitBatchWithinRedistributesUnusedShares(t *testing.T) {
+	store := NewResultStore(32 << 10)
+	names := []string{"file_read", "file_read", "file_read", "file_read"}
+	results := []Result{
+		{Content: batchResultContent(100)},
+		{Content: batchResultContent(200)},
+		{Content: batchResultContent(300)},
+		{Content: batchResultContent(8000)},
+	}
+	// The equal split of the 8000-unit pool would cap every result at 2000;
+	// the pool instead admits the small results whole and hands their
+	// reclaimed shares to the large one (100+200+300 inline, 7400 left).
+	admitted := store.AdmitBatchWithin(names, results, 8000, 8000)
+	for _, index := range []int{0, 1, 2} {
+		if admitted[index].Truncated {
+			t.Fatalf("small result %d truncated: %+v",
+				index, admitted[index].Admission)
+		}
+	}
+	large := admitted[3]
+	if !large.Truncated || large.Handle == "" {
+		t.Fatalf("large result not spilled: %+v", large)
+	}
+	if large.Admission.TokenLimit != 7400 {
+		t.Fatalf("large allocation = %d, want 7400",
+			large.Admission.TokenLimit)
+	}
+}
+
+func TestAdmitBatchWithinEqualLargeBatchMatchesEqualSplit(t *testing.T) {
+	store := NewResultStore(32 << 10)
+	names := []string{"file_read", "file_read", "file_read", "file_read"}
+	results := make([]Result, 4)
+	for index := range results {
+		results[index] = Result{Content: batchResultContent(8000)}
+	}
+	admitted := store.AdmitBatchWithin(names, results, 8000, 8000)
+	var retained uint64
+	for index, result := range admitted {
+		if !result.Truncated {
+			t.Fatalf("equally large result %d not truncated", index)
+		}
+		if result.Admission.TokenLimit != 2000 {
+			t.Fatalf("waterline %d = %d, want 2000",
+				index, result.Admission.TokenLimit)
+		}
+		retained += result.Admission.RetainedTokens
+	}
+	if retained > 8000 {
+		t.Fatalf("retained aggregate %d exceeds pool", retained)
+	}
+}
+
+func TestAdmitBatchWithinZeroPoolFallsBackToItemBudget(t *testing.T) {
+	store := NewResultStore(32 << 10)
+	names := []string{"file_read", "file_read"}
+	results := []Result{
+		{Content: batchResultContent(300)},
+		{Content: batchResultContent(50)},
+	}
+	admitted := store.AdmitBatchWithin(names, results, 100, 0)
+	if !admitted[0].Truncated || admitted[0].Admission.TokenLimit != 100 {
+		t.Fatalf("large result = %+v", admitted[0].Admission)
+	}
+	if admitted[1].Truncated {
+		t.Fatalf("small result truncated: %+v", admitted[1].Admission)
+	}
+}
+
+func TestAdmitBatchWithinItemCapBoundsSingleResult(t *testing.T) {
+	store := NewResultStore(32 << 10)
+	admitted := store.AdmitBatchWithin(
+		[]string{"file_read"},
+		[]Result{{Content: batchResultContent(5000)}},
+		1000, 8000,
+	)
+	if !admitted[0].Truncated || admitted[0].Admission.TokenLimit != 1000 {
+		t.Fatalf("item cap not enforced: %+v", admitted[0].Admission)
+	}
+}

@@ -340,6 +340,12 @@ Convergence 状态都会持久化并在 Runtime 恢复后延续。`execution.max
 `execution.idle_timeout` 约束相邻流事件之间的空闲时间，每收到一个事件就重新计时，
 因此持续产出进展的长流不会在固定两分钟后被中断。
 
+`execution.max_concurrent` 是运维侧声明的 Provider 并发合同。同一 Session 内
+主 Agent 与全部 Subagent 的并发模型采样都受它约束：Runtime 在两个层面执行同一
+声明值——Provider HTTP 客户端的在途请求上限，以及会话级采样门的并发槽。声明为
+`1` 时保持严格单飞。任一采样收到 429 后，共享的 Retry-After 冷却会冻结全部并发
+槽，冷却结束后按槽位继续。该字段可由 `QCODE_MAX_CONCURRENT` 覆盖。
+
 `execution.rate_limit` 是运维侧声明的初始请求速率上限。无论该值是否为零，Runtime
 都会按 Provider、Endpoint、Credential 引用和 Model 共享动态限流状态：优先采用
 `Retry-After`，其次采用 `RateLimit-Reset`/`X-RateLimit-Reset`；Provider 未返回时间

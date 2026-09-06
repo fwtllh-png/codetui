@@ -822,6 +822,16 @@ func (r *Registry) AdmitResultWithin(
 	return r.results.AdmitWithin(name, result, maxTokens)
 }
 
+// AdmitBatchWithin admits a finished batch under a shared pool; see
+// ResultStore.AdmitBatchWithin.
+func (r *Registry) AdmitBatchWithin(
+	names []string,
+	results []Result,
+	itemTokens, totalTokens uint64,
+) []Result {
+	return r.results.AdmitBatchWithin(names, results, itemTokens, totalTokens)
+}
+
 func (r *Registry) ResultTokenCapacity() uint64 {
 	return r.results.TokenCapacity()
 }
@@ -1168,6 +1178,75 @@ func (s *ResultStore) AdmitWithin(
 	receipt.RetainedTokens = estimateResultTokens(result.Content)
 	result.Admission = &receipt
 	return result, receipt
+}
+
+// AdmitBatchWithin admits a finished tool batch under a shared token pool
+// instead of an equal per-result split. Results are considered in ascending
+// size order: each result smaller than the current waterline stays fully
+// inline and returns its unused share to the pool, while larger results spill
+// at the waterline with a retrieval handle. A batch of equally large results
+// therefore receives the same per-result share as the equal split, but mixed
+// batches no longer waste the shares of small results. itemTokens bounds a
+// single result; totalTokens bounds the batch aggregate. A zero totalTokens
+// disables the pool and admits every result at itemTokens.
+func (s *ResultStore) AdmitBatchWithin(
+	names []string,
+	results []Result,
+	itemTokens, totalTokens uint64,
+) []Result {
+	if len(results) == 0 {
+		return results
+	}
+	if len(names) != len(results) {
+		names = nil
+	}
+	if totalTokens == 0 {
+		for index := range results {
+			name := ""
+			if names != nil {
+				name = names[index]
+			}
+			results[index], _ = s.AdmitWithin(name, results[index], itemTokens)
+		}
+		return results
+	}
+	order := make([]int, len(results))
+	for index := range order {
+		order[index] = index
+	}
+	sizes := make([]uint64, len(results))
+	for index, result := range results {
+		sizes[index] = resultUnits(result.Content)
+	}
+	sort.Slice(order, func(left, right int) bool {
+		if sizes[order[left]] != sizes[order[right]] {
+			return sizes[order[left]] < sizes[order[right]]
+		}
+		return order[left] < order[right]
+	})
+	remaining, undecided := totalTokens, uint64(len(results))
+	itemCap := max(uint64(1), itemTokens)
+	for _, index := range order {
+		waterline := max(uint64(1), remaining/max(uint64(1), undecided))
+		allocation := max(uint64(1), min(min(sizes[index], waterline), itemCap))
+		name := ""
+		if names != nil {
+			name = names[index]
+		}
+		results[index], _ = s.AdmitWithin(name, results[index], allocation)
+		remaining -= min(remaining, allocation)
+		undecided--
+	}
+	return results
+}
+
+// resultUnits reports a result's admission footprint in the unit pool
+// accounting shares with AdmitWithin: the token estimate and the byte length
+// are both binding there, so the larger of the two governs.
+func resultUnits(content string) uint64 {
+	tokens := estimateResultTokens(content)
+	byBytes := (uint64(len(content)) + 3) / 4
+	return max(tokens, byBytes)
 }
 
 func (s *ResultStore) PruneSurface(

@@ -657,3 +657,140 @@ func executeProcessTool(
 	}
 	return result
 }
+
+func TestWriteStdinExtendsSilentWaitBeyondDefaultWindow(t *testing.T) {
+	manager := process.NewSessionManager(4096)
+	t.Cleanup(manager.CloseAll)
+	registry := tool.NewRegistry(nil, nil)
+	if err := RegisterWithManagerAndBackend(
+		registry,
+		t.TempDir(),
+		manager,
+		passthroughBackend{},
+	); err != nil {
+		t.Fatal(err)
+	}
+	yielded := executeProcessTool(
+		t,
+		registry,
+		processTestThread,
+		"exec_command",
+		map[string]any{
+			"command": "sleep 5.3; printf done", "yield_time_ms": 80,
+		},
+	)
+	id, _ := yielded.Metadata["session_id"].(string)
+	if id == "" {
+		t.Fatalf("exec did not yield a session: %+v", yielded.Metadata)
+	}
+	started := time.Now()
+	continued := executeProcessTool(
+		t,
+		registry,
+		processTestThread,
+		"write_stdin",
+		map[string]any{"session_id": id},
+	)
+	elapsed := time.Since(started)
+	// The exit lands beyond the first 5000ms default window; the undeclared
+	// wait keeps extending instead of returning a still-running poll result.
+	if elapsed < 5*time.Second {
+		t.Fatalf("write_stdin returned after %s, inside the first window", elapsed)
+	}
+	if continued.Metadata["running"] == true ||
+		continued.Content != "done" {
+		t.Fatalf("extended wait missed the exit: %+v", continued)
+	}
+	if _, exists := continued.Metadata["session_id"]; exists {
+		t.Fatalf("exited session was not closed: %+v", continued.Metadata)
+	}
+	if manager.Count() != 0 {
+		t.Fatalf("session count = %d", manager.Count())
+	}
+}
+
+func TestWriteStdinDeclaredYieldIsExactWindow(t *testing.T) {
+	manager := process.NewSessionManager(4096)
+	t.Cleanup(manager.CloseAll)
+	registry := tool.NewRegistry(nil, nil)
+	if err := RegisterWithManagerAndBackend(
+		registry,
+		t.TempDir(),
+		manager,
+		passthroughBackend{},
+	); err != nil {
+		t.Fatal(err)
+	}
+	yielded := executeProcessTool(
+		t,
+		registry,
+		processTestThread,
+		"exec_command",
+		map[string]any{"command": "sleep 5", "yield_time_ms": 80},
+	)
+	id, _ := yielded.Metadata["session_id"].(string)
+	if id == "" {
+		t.Fatalf("exec did not yield a session: %+v", yielded.Metadata)
+	}
+	started := time.Now()
+	continued := executeProcessTool(
+		t,
+		registry,
+		processTestThread,
+		"write_stdin",
+		map[string]any{"session_id": id, "yield_time_ms": 100},
+	)
+	if elapsed := time.Since(started); elapsed > 1500*time.Millisecond {
+		t.Fatalf("declared yield waited %s beyond its window", elapsed)
+	}
+	if continued.Metadata["running"] != true ||
+		continued.Metadata["timed_out"] != true {
+		t.Fatalf("declared window result = %+v", continued.Metadata)
+	}
+	if continued.Metadata["error_category"] != "process_still_running" ||
+		continued.Metadata["required_action"] != "write_stdin" ||
+		continued.Metadata["retry_original"] != false {
+		t.Fatalf("silent timeout hint missing: %+v", continued.Metadata)
+	}
+}
+
+func TestWriteStdinReturnsPromptlyOnNewOutput(t *testing.T) {
+	manager := process.NewSessionManager(4096)
+	t.Cleanup(manager.CloseAll)
+	registry := tool.NewRegistry(nil, nil)
+	if err := RegisterWithManagerAndBackend(
+		registry,
+		t.TempDir(),
+		manager,
+		passthroughBackend{},
+	); err != nil {
+		t.Fatal(err)
+	}
+	yielded := executeProcessTool(
+		t,
+		registry,
+		processTestThread,
+		"exec_command",
+		map[string]any{
+			"command": "sleep 0.25; printf tick", "yield_time_ms": 40,
+		},
+	)
+	id, _ := yielded.Metadata["session_id"].(string)
+	if id == "" {
+		t.Fatalf("exec did not yield a session: %+v", yielded.Metadata)
+	}
+	started := time.Now()
+	continued := executeProcessTool(
+		t,
+		registry,
+		processTestThread,
+		"write_stdin",
+		map[string]any{"session_id": id},
+	)
+	if elapsed := time.Since(started); elapsed > 4*time.Second {
+		t.Fatalf("undeclared wait stalled %s on live output", elapsed)
+	}
+	if continued.Content != "tick" || continued.Metadata["running"] == true {
+		t.Fatalf("output result = %+v", continued)
+	}
+}

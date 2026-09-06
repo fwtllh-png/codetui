@@ -7,21 +7,26 @@ import (
 )
 
 // SharedRateLimit is the session-wide provider sample gate. Parent and child
-// engines share one instance so concurrent samples queue on a single in-flight
-// request and honor one Retry-After cooldown instead of each hammering the
-// provider with a private retry pot.
+// engines share one instance so concurrent samples stay within the
+// operator-declared provider concurrency contract (execution.max_concurrent,
+// the same ceiling the provider HTTP client enforces) and honor one shared
+// Retry-After cooldown instead of each hammering the provider with a private
+// retry pot.
 type SharedRateLimit struct {
 	init sync.Once
 	mu   sync.Mutex
 
+	limit         int
 	token         chan struct{}
 	retries       uint32
 	waited        time.Duration
 	cooldownUntil time.Time
 }
 
-func NewSharedRateLimit() *SharedRateLimit {
-	limiter := &SharedRateLimit{}
+// NewSharedRateLimit derives the gate capacity from the operator-declared
+// provider concurrency; values below one keep single-flight.
+func NewSharedRateLimit(concurrency int) *SharedRateLimit {
+	limiter := &SharedRateLimit{limit: max(1, concurrency)}
 	limiter.ensure()
 	return limiter
 }
@@ -31,8 +36,14 @@ func (s *SharedRateLimit) ensure() {
 		return
 	}
 	s.init.Do(func() {
-		s.token = make(chan struct{}, 1)
-		s.token <- struct{}{}
+		limit := s.limit
+		if limit < 1 {
+			limit = 1
+		}
+		s.token = make(chan struct{}, limit)
+		for range limit {
+			s.token <- struct{}{}
+		}
 	})
 }
 

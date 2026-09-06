@@ -1042,6 +1042,59 @@ func TestRunToolsEnforcesRecordedEconomicSurfaceBudget(t *testing.T) {
 	}
 }
 
+func TestRunToolsPoolAdmitsMixedBatchByDemand(t *testing.T) {
+	registry := tool.NewRegistry(nil, nil)
+	if err := registry.Register(largeResultTool{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.Register(smallResultTool{}); err != nil {
+		t.Fatal(err)
+	}
+	engine := newEngine(t, &scriptedProvider{}, registry)
+	scope := engine.executionScope()
+	// Pool of 200 units: the equal split would cap both results at 100 and
+	// truncate the large one; the pool admits the 19-unit result whole and
+	// grants the large one the reclaimed 181.
+	scope.mu.Lock()
+	scope.state.toolSurfaceMaxBytes = 800
+	scope.state.toolSurfaceItemBytes = 800
+	scope.mu.Unlock()
+	kernel := newEngineTurnKernel(
+		protocol.TurnIntentAnswer,
+		"act",
+		nil,
+		0,
+		nil,
+		nil,
+	)
+	results, err := engine.runToolsWithCache(
+		t.Context(),
+		"turn-pool",
+		[]provider.ToolCall{
+			{ID: "call-small", Name: "small_result", Arguments: `{}`},
+			{ID: "call-large", Name: "large_result", Arguments: `{}`},
+		},
+		make(map[string]tool.Result),
+		&toolResultCache{},
+		kernel,
+		func(State, Event) error { return nil },
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("results = %d, want 2", len(results))
+	}
+	if results[0].Truncated {
+		t.Fatalf("small result truncated: %+v", results[0].Admission)
+	}
+	large := results[1]
+	if !large.Truncated || large.Admission == nil ||
+		large.Admission.TokenLimit != 181 {
+		t.Fatalf("pooled large admission = %+v", large)
+	}
+}
+
 func TestFinishOnlyClosesExplorationCallWithoutExecutingIt(t *testing.T) {
 	registry := tool.NewRegistry(nil, nil)
 	executor := &echoTool{}
@@ -3540,6 +3593,27 @@ func (largeResultTool) Descriptor() tool.Descriptor {
 
 func (largeResultTool) Execute(context.Context, json.RawMessage) (tool.Result, error) {
 	return tool.Result{Content: strings.Repeat("large result ", 100)}, nil
+}
+
+type smallResultTool struct{}
+
+func (smallResultTool) Descriptor() tool.Descriptor {
+	return tool.Descriptor{
+		Name: "small_result", Description: "small result fixture",
+		Visibility: tool.VisibleModel, Capability: tool.CapabilityRead,
+		AccessMode: tool.AccessRead, ParallelPolicy: tool.ParallelConcurrent,
+		SandboxRequirement: tool.SandboxNone,
+		Availability:       tool.AvailabilityAvailable,
+		InputSchema: map[string]any{
+			"type":                 "object",
+			"properties":           map[string]any{},
+			"additionalProperties": false,
+		},
+	}
+}
+
+func (smallResultTool) Execute(context.Context, json.RawMessage) (tool.Result, error) {
+	return tool.Result{Content: strings.Repeat("ok ", 25)}, nil
 }
 
 type processSessionTool struct{}
