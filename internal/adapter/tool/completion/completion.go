@@ -36,8 +36,10 @@ func (*Tool) Descriptor() tool.Descriptor {
 			"only after every requested action, the last mutation, and all required quality " +
 			"checks. For complete, summary is the exact user-facing final response and " +
 			"pending_actions must be empty; the runtime publishes summary without another " +
-			"model sample. During convergence finalization only, output_mode=" +
-			"preserve_provisional keeps the captured response and appends summary. If work " +
+			"model sample. When captured narration is available (for example after " +
+			"declaration repair or during convergence finalization), output_mode=" +
+			"preserve_provisional keeps the captured response and appends summary " +
+			"instead of rewriting it. If work " +
 			"remains, use status=incomplete with a progress summary and concrete pending " +
 			"actions so the runtime records a resumable blocked outcome.",
 		Visibility:         tool.VisibleModel,
@@ -60,7 +62,7 @@ func (*Tool) Descriptor() tool.Descriptor {
 				"output_mode": map[string]any{
 					"type":        "string",
 					"enum":        []string{"exact", "preserve_provisional"},
-					"description": "Use preserve_provisional only when convergence finalization says captured output is available.",
+					"description": "Use preserve_provisional when captured narration from this Turn already states the answer; it is rejected when nothing was captured.",
 				},
 				"pending_actions": map[string]any{
 					"type": "array", "maxItems": 32,

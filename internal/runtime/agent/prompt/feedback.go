@@ -84,11 +84,14 @@ func CompletionDeclarationFeedback(turn uint64) provider.Message {
 			"a user answer, call it now and wait in this same Turn. Otherwise report the "+
 			"actual work state through turn_complete. Use status=complete only when every "+
 			"requested action is finished, put the exact user-facing final response in "+
-			"summary, and set pending_actions=[]. The runtime publishes that summary "+
-			"without another model sample. If any work remains, use status=incomplete and "+
-			"list each concrete pending action; the runtime will continue this same Turn. "+
-			"The runtime binds any changed paths and accepted verification evidence automatically. "+
-			"Do not move requested work to a future turn.")
+			"summary, and set pending_actions=[]. Your previous narration was preserved: "+
+			"when it already states the final answer, call turn_complete with "+
+			"output_mode=preserve_provisional and a one-line closing summary; the runtime "+
+			"appends it to the preserved body instead of rewriting the answer. If any "+
+			"work remains, use status=incomplete and list each concrete pending action; "+
+			"the runtime will continue this same Turn. The runtime binds any changed "+
+			"paths and accepted verification evidence automatically. Do not move "+
+			"requested work to a future turn.")
 }
 
 func CompletionFeedback(turn uint64) provider.Message {

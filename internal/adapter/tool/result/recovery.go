@@ -23,6 +23,14 @@ func RecoverResult(
 ) (tool.Result, bool) {
 	content, recoverable := RecoverableFailure(err)
 	if !recoverable {
+		// Known policy rejections are zero-side-effect per-call outcomes:
+		// they stay structured model-visible results for every capability
+		// instead of failing the whole batch through the error fallback.
+		if decision, ok := errors.AsType[*policy.DecisionError](err); ok {
+			_, _, _, recoverable = policyDecisionHint(decision.Code)
+		}
+	}
+	if !recoverable {
 		_, descriptor, _, resolveErr := registry.ResolveBound(
 			call.Name,
 			tool.BindingForCall(call),
@@ -64,6 +72,57 @@ func RecoverResult(
 	tool.EnsureOutcomeFacts(&result).Failure =
 		&tool.FailureFact{Category: category}
 	return result, true
+}
+
+// policyDecisionHint maps pre-execution policy decision codes to structured
+// recovery guidance. Every mapped code is a zero-side-effect rejection: the
+// model receives a directly executable correction instead of an unexplained
+// failure it can only retry blindly.
+func policyDecisionHint(code string) (
+	action string, retryOriginal bool, guidance string, ok bool,
+) {
+	switch code {
+	case "mode_denied":
+		return "submit_plan", false,
+			"plan mode rejects mutations; deliver the work as a plan via submit_plan", true
+	case "permission_denied", "permission_unknown", "mode_unknown":
+		return "choose_read_only_alternative", false,
+			"the approval posture denies this side effect; use a read-only " +
+				"alternative or report the action blocked", true
+	case "tool_grant_missing", "tool_grant_denied", "granular_denied",
+		"repository_rule_denied", "repository_hold", "repository_source_invalid",
+		"user_rule_denied", "policy_denied", "policy_unavailable",
+		"policy_invalid_invocation", "policy_unvalidated_invocation",
+		"policy_unknown_capability":
+		return "choose_alternative_tool", false,
+			"this tool is not permitted in the current session; pick a " +
+				"different tool from the catalog instead of retrying", true
+	case "approval_denied", "approval_canceled", "approval_host_unavailable":
+		return "choose_alternative_or_declare_incomplete", false,
+			"the approval path refused this action; do not request the same " +
+				"approval again", true
+	case "approval_scope_denied":
+		return "choose_alternative_or_declare_incomplete", false,
+			"the approval scope does not cover this invocation; do not " +
+				"request the same approval again", true
+	case "approval_expired":
+		return "request_approval_again", true,
+			"the approval wait expired; resubmitting the same call asks for " +
+				"approval again", true
+	case "authorization_changed":
+		return "retry_original", true,
+			"tool authorization changed mid-flight; retry the same call to " +
+				"re-authorize", true
+	case "edit_plan_unavailable":
+		return "choose_alternative_tool", false,
+			"this writer cannot produce a safe edit preview in the current " +
+				"configuration", true
+	case "edit_plan_mismatch":
+		return "repropose_edit_for_approval", false,
+			"the approval does not identify the displayed edit plan; " +
+				"repropose the edit", true
+	}
+	return "", false, "", false
 }
 
 func RecoverableFailure(err error) (string, bool) {
@@ -117,13 +176,17 @@ func RecoverableFailure(err error) (string, bool) {
 	}
 	if decision, ok := errors.AsType[*policy.DecisionError](err); ok {
 		switch decision.Code {
-		case "approval_denied":
-			return decision.Reason, true
 		case "plan_required":
 			return decision.Reason + "; call submit_plan with a structured plan, then retry the requested action", true
 		case "edit_plan_stale":
 			return decision.Reason +
 				"; re-read the affected file and submit a new edit for approval", true
+		}
+		if action, retry, guidance, known := policyDecisionHint(decision.Code); known {
+			return fmt.Sprintf(
+				"%s; required_action=%s; retry_original=%t; %s",
+				decision.Reason, action, retry, guidance,
+			), true
 		}
 		return "", false
 	}
@@ -193,6 +256,13 @@ func FailureMetadata(err error) map[string]any {
 			return map[string]any{"error_category": "plan_required", "required_action": "submit_plan", "retry_original": false}
 		case "edit_plan_stale":
 			return map[string]any{"error_category": "edit_plan_stale", "required_action": "file_read", "retry_original": false, "approval_required": true}
+		}
+		if action, retry, _, known := policyDecisionHint(decision.Code); known {
+			return map[string]any{
+				"error_category":  decision.Code,
+				"required_action": action,
+				"retry_original":  retry,
+			}
 		}
 	}
 	var validation *workspacejournal.ReadValidationError

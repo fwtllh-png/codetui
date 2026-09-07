@@ -321,7 +321,7 @@ func (f *ContextForker) Fork(
 		capsule.SourceTurn = firstNonEmpty(snapshot.SourceTurn, request.Source.TurnID)
 		capsule.ParentGoal = sanitize(snapshot.ParentGoal)
 		capsule.UserRequest = sanitize(snapshot.UserRequest)
-		capsule.RelevantFiles = sanitizeFiles(snapshot.RelevantFiles, policy.MaxFiles)
+		capsule.RelevantFiles = sanitizeFiles(snapshot.RelevantFiles, policy.MaxFiles, sanitize)
 		capsule.Evidence = sanitizeEvidence(snapshot.Evidence, policy.MaxEvidence, sanitize)
 		capsule.WorkspaceRules = sanitizeStrings(snapshot.WorkspaceRules, sanitize)
 	}
@@ -422,7 +422,11 @@ func prohibitedActions(agent Agent) []string {
 	return actions
 }
 
-func sanitizeFiles(files []RelevantFile, limit int) []RelevantFile {
+func sanitizeFiles(
+	files []RelevantFile,
+	limit int,
+	sanitize func(string) string,
+) []RelevantFile {
 	if len(files) > limit {
 		files = files[:limit]
 	}
@@ -435,6 +439,16 @@ func sanitizeFiles(files []RelevantFile, limit int) []RelevantFile {
 		copy := file
 		copy.Path = path
 		copy.Sources = append([]string(nil), file.Sources...)
+		if file.Excerpt != "" {
+			// Excerpts carry workspace facts only, but they still pass the
+			// redactor and the delegation excerpt bound before entering the
+			// capsule.
+			excerpt, _ := boundedText(
+				sanitize(file.Excerpt),
+				runtimecontext.MaxRelevantFileExcerptBytes,
+			)
+			copy.Excerpt = excerpt
+		}
 		cloned = append(cloned, copy)
 	}
 	return cloned
@@ -583,6 +597,12 @@ func fitCapsule(
 			excluded = append(excluded, ContextItem{
 				Kind: "evidence", Count: 1, Reason: "context budget",
 			})
+		case stripLargestExcerpt(capsule.RelevantFiles):
+			// A path without its excerpt still orients the child; drop the
+			// whole file only after every excerpt is gone.
+			excluded = append(excluded, ContextItem{
+				Kind: "relevant_file_excerpt", Count: 1, Reason: "context budget",
+			})
 		case len(capsule.RelevantFiles) > 0:
 			capsule.RelevantFiles = capsule.RelevantFiles[:len(capsule.RelevantFiles)-1]
 			excluded = append(excluded, ContextItem{
@@ -607,6 +627,22 @@ func fitCapsule(
 			)
 		}
 	}
+}
+
+// stripLargestExcerpt clears the largest remaining relevant-file excerpt so
+// budget pressure degrades delegation hints before it drops file paths.
+func stripLargestExcerpt(files []RelevantFile) bool {
+	largest, largestBytes := -1, 0
+	for index := range files {
+		if size := len(files[index].Excerpt); size > largestBytes {
+			largest, largestBytes = index, size
+		}
+	}
+	if largest < 0 {
+		return false
+	}
+	files[largest].Excerpt = ""
+	return true
 }
 
 func renderCapsule(capsule TaskCapsule) (string, error) {
@@ -657,7 +693,11 @@ func includedItems(capsule TaskCapsule) []ContextItem {
 	}
 	appendItem("parent_goal", 0, len(capsule.ParentGoal))
 	appendItem("user_request", 0, len(capsule.UserRequest))
-	appendItem("relevant_file", len(capsule.RelevantFiles), 0)
+	excerptBytes := 0
+	for _, file := range capsule.RelevantFiles {
+		excerptBytes += len(file.Excerpt)
+	}
+	appendItem("relevant_file", len(capsule.RelevantFiles), excerptBytes)
 	appendItem("evidence", len(capsule.Evidence), 0)
 	appendItem("workspace_rule", len(capsule.WorkspaceRules), 0)
 	appendItem("history_turn", len(capsule.RecentTurns), 0)

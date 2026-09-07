@@ -263,7 +263,10 @@ Agent Lifecycle Tool。
 `spawn_agent` 从当前 Runtime Turn 自动捕获 Parent Context。`context_mode` 默认是
 `task_capsule`；`fresh` 不继承 Parent Context，`last_n_turns` 最多加入
 `context_turns` 个包含完整 Tool Call/Result 配对的最近 Turn，`full` 需要明确授权或
-Role Policy。Tool 返回 `context_receipt`，记录来源、包含/排除原因、字节和 Token
+Role Policy。`task_capsule` 中的每个 Relevant File 附带不超过 2048 字节的当前文件
+内容前缀（Excerpt）：它只共享 Workspace 事实、经过脱敏，且 Capsule 预算不足时先
+剥离 Excerpt 再丢弃文件路径，Child 需要完整内容时仍应自行读取窗口。Tool 返回
+`context_receipt`，记录来源、包含/排除原因、字节和 Token
 预算及 SHA-256 Digest。旧的 `fork_context` 和 `parent_context` 参数不再接受。
 Capsule 未显式配置容量时，使用父 Turn 硬输入容量扣除当前模型可见 Context 后的余量，
 再由 Child Agent Token Budget 收窄；不再套用固定的字节或 Token 档位。

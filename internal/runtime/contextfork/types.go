@@ -20,10 +20,18 @@ type ContextMessage struct {
 	Blocks []ContextBlock `json:"blocks"`
 }
 
+// MaxRelevantFileExcerptBytes bounds the workspace-fact excerpt attached to
+// each delegated relevant file. An excerpt is a delegation hint, not a file
+// transfer: the child still reads the full window when the task needs it.
+const MaxRelevantFileExcerptBytes = 2 << 10
+
 type ContextRelevantFile struct {
 	Path     string   `json:"path"`
 	Sources  []string `json:"sources,omitempty"`
 	Critical bool     `json:"critical,omitempty"`
+	// Excerpt is a bounded prefix of the file's current content. It carries
+	// workspace facts only and is redacted and re-bounded by the fork.
+	Excerpt string `json:"excerpt,omitempty"`
 }
 
 type ContextEvidence struct {

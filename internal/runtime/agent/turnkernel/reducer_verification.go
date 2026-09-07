@@ -174,9 +174,7 @@ func applyCompletion(
 	case candidate.QualityRequired && len(candidate.QualityCalls) == 0:
 		decision.Reason = "quality_verification_required"
 	case candidate.OutputMode == "preserve_provisional" &&
-		(current.Convergence == nil ||
-			!current.Convergence.FinalizationAttempted ||
-			len(current.ProvisionalOutput) == 0):
+		len(current.ProvisionalOutput) == 0:
 		decision.Reason = "provisional_output_unavailable"
 	default:
 		decision.Accepted = true

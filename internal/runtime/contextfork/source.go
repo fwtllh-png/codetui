@@ -95,6 +95,11 @@ func (s *Source) Snapshot(
 		for index, item := range entry.Sources {
 			file.Sources[index] = string(item)
 		}
+		if excerpt, ok := engine.WorkspaceExcerpt(
+			file.Path, MaxRelevantFileExcerptBytes,
+		); ok {
+			file.Excerpt = excerpt
+		}
 		snapshot.RelevantFiles = append(snapshot.RelevantFiles, file)
 	}
 	for index, fact := range evidence.Facts {

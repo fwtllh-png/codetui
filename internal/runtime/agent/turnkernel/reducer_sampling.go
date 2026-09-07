@@ -451,7 +451,15 @@ func applyObserveProgress(
 		lease := current.Policy.ImplementNoProgressSamples
 		convergeAt = max(uint32(1), lease/2)
 		finishOnlyAt = lease
-		limit = max(lease+1, limit)
+		// The implement lease is the authoritative no-progress bound: its
+		// exhaustion keeps the same repair-reserve construction as the
+		// step-limit lease, so every stage is explained by explicit
+		// configuration instead of trailing behind the step limit.
+		repairReserve := current.Policy.CompletionRepairLimit +
+			current.Policy.WorkspaceRepairLimit +
+			current.Policy.DeclarationRepairLimit +
+			current.Policy.VerificationRepairLimit
+		limit = max(lease+1, lease+repairReserve)
 	}
 	switch {
 	case limit == 0:

@@ -10,6 +10,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/fwtllh-png/QCode/internal/orchestration/subagent"
+	"github.com/fwtllh-png/QCode/internal/runtime/contextfork"
 )
 
 type contextFixtureSource struct {
@@ -362,4 +363,88 @@ func hasExcludedReason(items []subagent.ContextItem, reason string) bool {
 		}
 	}
 	return false
+}
+
+func TestTaskCapsuleCarriesRedactedFileExcerpts(t *testing.T) {
+	forker := subagent.NewContextForker(subagent.DefaultContextPolicy())
+	forker.BindSource(contextFixtureSource{
+		snapshot: subagent.ParentContextSnapshot{
+			SourceThread: "thread-parent", SourceTurn: "turn-parent",
+			ParentGoal: "repair auth",
+			RelevantFiles: []subagent.RelevantFile{{
+				Path:    "pkg/auth.go",
+				Sources: []string{"read"},
+				Excerpt: "package auth\n// token=secret-value " +
+					strings.Repeat("body ", 1024),
+			}},
+		},
+	})
+	fork, err := forker.Fork(t.Context(), contextRequest(""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(fork.Prompt, "pkg/auth.go") ||
+		!strings.Contains(fork.Prompt, "package auth") {
+		t.Fatalf("capsule lost the file excerpt: %s", fork.Prompt)
+	}
+	if strings.Contains(fork.Prompt, "secret-value") {
+		t.Fatalf("capsule leaked a secret through the excerpt: %s", fork.Prompt)
+	}
+	for _, file := range fork.Capsule.RelevantFiles {
+		if file.Excerpt != "" &&
+			len(file.Excerpt) > contextfork.MaxRelevantFileExcerptBytes {
+			t.Fatalf("excerpt exceeds the delegation bound: %d", len(file.Excerpt))
+		}
+	}
+	var excerptItem bool
+	for _, item := range fork.Receipt.Included {
+		if item.Kind == "relevant_file" && item.Bytes > 0 {
+			excerptItem = true
+		}
+	}
+	if !excerptItem {
+		t.Fatalf("receipt did not account for excerpt bytes: %+v",
+			fork.Receipt.Included,
+		)
+	}
+}
+
+func TestTaskCapsuleStripsExcerptsBeforeDroppingFiles(t *testing.T) {
+	forker := subagent.NewContextForker(subagent.ContextPolicy{
+		MaxBytes: 1200, MaxFiles: 2,
+	})
+	forker.BindSource(contextFixtureSource{
+		snapshot: subagent.ParentContextSnapshot{
+			SourceThread: "thread-parent", SourceTurn: "turn-parent",
+			ParentGoal: "repair auth",
+			RelevantFiles: []subagent.RelevantFile{
+				{Path: "pkg/auth.go", Excerpt: strings.Repeat("a ", 600)},
+				{Path: "pkg/token.go", Excerpt: strings.Repeat("b ", 600)},
+			},
+		},
+	})
+	fork, err := forker.Fork(t.Context(), contextRequest(""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(fork.Capsule.RelevantFiles) != 2 {
+		t.Fatalf("budget dropped a whole file: %+v", fork.Capsule.RelevantFiles)
+	}
+	for _, file := range fork.Capsule.RelevantFiles {
+		if file.Excerpt != "" {
+			t.Fatalf("budget kept excerpts: %+v", fork.Capsule.RelevantFiles)
+		}
+	}
+	sawExcerptStrip := false
+	for _, item := range fork.Receipt.Excluded {
+		if item.Kind == "relevant_file_excerpt" {
+			sawExcerptStrip = true
+		}
+	}
+	if !sawExcerptStrip {
+		t.Fatalf("receipt missing excerpt exclusions: %+v", fork.Receipt.Excluded)
+	}
+	if len(fork.Prompt) > 1200 {
+		t.Fatalf("prompt exceeds budget: %d", len(fork.Prompt))
+	}
 }

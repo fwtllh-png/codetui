@@ -298,8 +298,10 @@ Control State。Cancel、Steer、Approval、Input 统一进入 `ControlPort`；�
     `required_action` 是完成剩余步骤或 `status=incomplete`，而不是再次 `update_plan`。
     步骤签名未变的 `update_plan` 会被拒绝，不写 `plan.delta`，也不续期进展 Lease。
     被拒绝的 `turn_complete` 调用身份不算结构化进展；同类拒绝耗尽 Declaration Repair
-    后进入 Convergence Finalization。Convergence Finalization 也可以使用
-    `output_mode=preserve_provisional` 保留已捕获正文并追加简短收尾。Runtime 不根据
+    后进入 Convergence Finalization。Declaration Repair 不清空已捕获正文；单独的
+    `turn_complete` 提案也不使正文失效。已捕获正文非空时，`turn_complete` 可以使用
+    `output_mode=preserve_provisional` 保留正文并追加简短收尾（`exact` 模式仍以
+    `summary` 精确替换）；正文为空时该模式被拒绝。Runtime 不根据
     正文措辞推断必需输入。Child Executor 没有 Input Host，不能等待用户
     输入，但仍必须通过 Tool Call 继续或通过 `turn_complete` 完成。
 11. `EvaluateTurnStep` 由 Reducer 选择 Repair、Verification、Finalize、Block 或
@@ -315,7 +317,9 @@ Control State。Cancel、Steer、Approval、Input 统一进入 `ControlPort`；�
     `git_diff` 由准入拒绝，且不改变签名。约三分之一时提示收敛，约三分之二时
     收窄为完成相关能力，完整 Lease 耗尽后进入一次受限 Finalization。Turn 一旦
     具有 Known 或 Open Work Item，改用 `execution.implement_no_progress_samples`
-    （默认 6）进入 Finish-only；`0` 仍继承 `max_steps` 的 2/3。该策略完全由调用方
+    （默认 6）作为三个阶段的一致权威：一半时提示收敛、全值进入 Finish-only、
+    再保留与 Step Lease 相同构造的 Repair 预算（默认 2+1+1+1=5）后强制
+    Finalization；`0` 仍继承 `max_steps` 的 2/3。该策略完全由调用方
     显式预算与公开合同字段派生，不使用模型档位或绝对经验阈值。
     Tool Result 明确声明 `retry_original=false` 时，同一 Turn、同一 Workspace Revision
     下的完全相同调用会直接回放该失败事实；Workspace 发生变更后缓存失效，允许根据新状态重试。

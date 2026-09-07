@@ -1488,3 +1488,42 @@ func startPendingEffect(t *testing.T, state State, effectID string) State {
 	}
 	return transition.State
 }
+
+func TestPreserveProvisionalAvailableOutsideConvergenceFinalization(t *testing.T) {
+	state := startSampling(t, protocol.TurnIntentAnswer)
+	state.ProvisionalOutput = []string{"narrated answer"}
+	state = apply(t, state, CompletionEvaluated{
+		Candidate: CompletionCandidate{
+			DeclarationValid: true,
+			Status:           "complete",
+			Summary:          "Closing note.",
+			OutputMode:       "preserve_provisional",
+			CompletionCall:   "complete-1",
+			BatchSize:        1,
+		},
+	}).State
+	if state.Completion == nil || !state.Completion.Accepted ||
+		len(state.ProvisionalOutput) != 2 ||
+		state.ProvisionalOutput[0] != "narrated answer" ||
+		state.ProvisionalOutput[1] != "\n\nClosing note." {
+		t.Fatalf("preserved completion = %+v", state)
+	}
+}
+
+func TestPreserveProvisionalStillRequiresCapturedOutput(t *testing.T) {
+	state := startSampling(t, protocol.TurnIntentAnswer)
+	state = apply(t, state, CompletionEvaluated{
+		Candidate: CompletionCandidate{
+			DeclarationValid: true,
+			Status:           "complete",
+			Summary:          "Closing note.",
+			OutputMode:       "preserve_provisional",
+			CompletionCall:   "complete-1",
+			BatchSize:        1,
+		},
+	}).State
+	if state.Completion == nil || state.Completion.Accepted ||
+		state.Completion.Reason != "provisional_output_unavailable" {
+		t.Fatalf("empty preserve completion = %+v", state.Completion)
+	}
+}

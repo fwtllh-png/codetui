@@ -779,3 +779,37 @@ func requestContains(request provider.ModelRequest, value string) bool {
 	}
 	return false
 }
+
+func TestDeclarationRepairPreservesNarrationForPreservedCompletion(t *testing.T) {
+	registry := declarationRegistry(t, false)
+	runtime := &scriptedProvider{streams: []provider.Stream{
+		textStream("The evidence review found three issues: R3, R4, and R5 are stale."),
+		toolCallStream("complete-1", completiontool.Name, `{
+			"status":"complete",
+			"summary":"Review complete.",
+			"output_mode":"preserve_provisional",
+			"pending_actions":[]
+		}`),
+	}}
+	engine := declarationEngine(t, runtime, registry, passedReceipt())
+
+	result, err := engine.RunForTurnWithIntentAndAttachments(
+		t.Context(), "turn-preserved-narration",
+		"review R3, R4, and R5 evidence",
+		protocol.TurnIntentPlan, nil, nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "The evidence review found three issues: R3, R4, and R5 are stale." +
+		"\n\nReview complete."
+	if result.State != Completed || result.Text != want {
+		t.Fatalf("result=%+v want=%q", result, want)
+	}
+	if len(runtime.requests) != 2 {
+		t.Fatalf("requests = %d, want one repair round trip", len(runtime.requests))
+	}
+	if !requestContains(runtime.requests[1], "preserve_provisional") {
+		t.Fatal("declaration repair feedback did not offer the preserve option")
+	}
+}

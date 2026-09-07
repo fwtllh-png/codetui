@@ -2,7 +2,7 @@
 
 | 项 | 内容 |
 | --- | --- |
-| 状态 | P0 已实施（见第 7 节）；P1-1、P1-2、P1-3 已实施（见第 7 节）；其余 P1/P2 未实施 |
+| 状态 | P0、P1 全部已实施；P2-1 已实施（见第 7 节）；P2-2、P2-3 未实施 |
 | 日期 | 2026-09-06 |
 | 基线 | 当前 `main`（bc7c94dc）+ 工作区未提交改动 |
 | 范围 | Runtime 任务推进速度、采样轮次效率、上下文保持 |
@@ -422,3 +422,99 @@ runtime/app/wire、security/sandbox、persist/artifact）、`scripts/check-docs.
 - **风险控制**：并发上限即显式配置本身（未引入任何新阈值）；route 级
   `rate_limit` RPS 平面与 TPM 准入平面不变，仍按 Provider 反馈动态限流。
 - 配置文档已补充 `execution.max_concurrent` 的双层语义说明。
+
+### P1-4 实施记录（2026-09-06）
+
+收窄无进展长尾 + repair 保留正文：
+
+**长尾收窄（`turnkernel/reducer_sampling.go`）**：
+implement lease 成为三个阶段的一致权威——耗尽点从
+`max(lease+1, stepLease)`（默认 69，B5 长尾的来源）改为
+`max(lease+1, lease+RepairReserve)`，其中 RepairReserve 是 Policy 的四项
+修复预算之和（默认 2+1+1+1=5），与 Step Lease
+`max_steps + 修复预算` 的构造完全同构。默认配置下三阶段为：第 3 个无进展
+采样提示收敛、第 6 个进入 finish-only、第 11 个强制 Finalization——
+每个数字都可由公开配置直接解释，不再出现"finish-only 在 6、耗尽在 69"
+的 63 个采样长尾。全量派生自显式配置，未引入新阈值。
+
+**repair 保留正文（三处配套，缺一不可）**：
+1. Declaration Repair 不再 `DiscardOutput`——纯文本停止触发的修复中，
+   已捕获正文就是候选答案；
+2. 单独的 `turn_complete` 提案不再清空正文
+   （`reducer_tool.go`，与收敛终结的豁免同构）——此前提案本身就会把正文
+   抹掉，使 1 的保留落空；
+3. `preserve_provisional` 的可用性从"仅收敛终结"放宽为"正文非空即可"
+   （`exact` 模式行为不变：summary 仍精确替换全文）。
+配套更新 Declaration Repair 反馈文案，明确告知保留正文与
+`output_mode=preserve_provisional` 一行收尾的选项。效果：模型写完答案后
+忘记结构化收尾时，修复采样只需一行声明确认，不再整篇重写。
+其余四类 repair（工具失败/继续叙述/未变更/验证失败）的丢弃保留——
+其正文分别已被工具提案清空或内容已被证伪。
+
+**文档同步**：`docs/zh-CN/architecture.md` 的完成契约与 implement lease
+段落已按新行为更新。
+
+**测试**：kernel 三例（lease+修复预算耗尽、零修复预算回退 lease+1、
+preserve 在收敛终结之外可用/正文为空仍拒绝）+ engine 一例
+（文本停止 → 声明修复 → preserve 一行收尾，最终输出为正文+收尾，
+全程 2 次采样）；既有 `TestConvergenceFinalizationPreservesCapturedOutput`
+与声明修复收敛测试不改一行照常通过（exact 语义不变）。
+
+### P1-5 实施记录（2026-09-06，第二部分）
+
+拒绝反馈结构化的剩余缺口：**通用 policy 拒绝**。此前仅
+`approval_denied/plan_required/edit_plan_stale` 与编辑失败有结构化指引；
+`tool_grant_missing/tool_grant_denied/repository_rule_denied/mode_denied`
+等十余类拒绝只有 reason 字符串，且存在读写不对称——读工具被拒走
+`RecoverResult`（结构化逐调用结果），**写工具被拒落到 batch 错误兜底**
+（无指引，且 `batchErr` 使整个 ToolEffect 失败，连坐同批其他调用）。
+
+- **提示表**（`result/recovery.go` 的 `policyDecisionHint`）：为全部已知
+  policy 决策码落定 `required_action` 与 `retry_original`——plan 模式拒绝
+  → `submit_plan`；posture 拒绝 → 只读替代；授权/仓库/用户规则拒绝 →
+  换工具；审批拒绝/取消/宿主不可用 → 换路径或声明未完成（不得重问）；
+  审批过期 → 允许重问（`retry_original=true`）；授权中途变更 → 原样重试；
+  编辑计划失配 → 重新提案。每条附一句可直接执行的纠正说明。
+- **读写对称**：`RecoverResult` 对带已知提示的 policy 拒绝解除能力限制
+  ——写工具被拒也产出结构化逐调用错误结果，不再设置 `batchErr` 连坐
+  整批（同批其他调用照常完成）。操作员自定义码（如自定义仓库 hold）
+  保持旧的兜底语义。
+- 与第一部分（已提交的 `a49770d1`：schema 说明、编辑恢复指引、
+  observation gate 指路、ModelResult 保留恢复事实）合并后，P1-5 的
+  "把每次拒绝变成可直接执行的纠正指令"覆盖了 B4/B6 的主要拒绝面。
+- **测试**：分类表新增 5 类 + 更新 2 类旧断言（`mode_denied`/
+  `permission_denied` 从不可恢复改为结构化可恢复）；
+  `TestRecoverResultStructuresPolicyDenialForWriteTools` 锁定写工具
+  不对称修复与未知码回退。
+
+### P2-1 实施记录（2026-09-06）
+
+子 Agent capsule 携带关键内容摘要：
+
+- **调研结论**：capsule 的 Evidence 条目本就带 Handle 字段，但
+  RelevantFiles 只有路径与来源；快照构建（`runtime/contextfork/source.go`）
+  从父引擎 Working Set 取文件列表，内容完全不可达——D2"准冷启动"的直接
+  原因。跨 Registry 的 ResultStore handle 对子 Agent 未必可解析
+  （子 Agent 拥有独立 toolset Registry），因此选择**内联有界摘录**而非
+  handle 传递。
+- **实现**：
+  - `Engine.WorkspaceExcerpt(relPath, maxBytes)`：读取工作区相对文件的
+    当前内容前缀。只共享 Workspace 事实（不触碰父对话）；拒绝路径逃逸
+    （绝对路径 / `..`）、缺失文件与二进制前缀（NUL 哨兵 + UTF-8 校验）。
+  - 摘录上限为 `contextfork.MaxRelevantFileExcerptBytes`（2048 字节，
+    导出常量随 capsule 契约声明：摘录是委派提示而非文件传输）。
+  - `Source.Snapshot` 为每个 Relevant File 填充摘录；
+    `sanitizeFiles` 对摘录过 Redactor 并重新截断（文件内容中的敏感值
+    同样脱敏，测试锁定）。
+  - `fitCapsule` 降级顺序细化为：RecentTurns → Evidence →
+    **Relevant File Excerpt（先剥最大摘录）** → Relevant File →
+    WorkspaceRules ——预算压力下先失去内容提示、后失去文件路径。
+  - `context_receipt` 的 relevant_file 条目计入摘录字节数，保持
+    receipt 的包含透明度。
+- **委托契约不变**：`parent_transcript` 仍被显式排除（capsule 的
+  Exclusions 与既有测试不改一行照常通过）。
+- 配置文档（`docs/zh-CN/configuration.md` 的 spawn_agent 段）已补充
+  Excerpt 语义与降级顺序说明。
+- **测试**：引擎摘录方法两例（有界前缀、逃逸/缺失/二进制/空文件拒绝，
+  race 通过）；capsule 两例（摘录携带 + 密钥脱敏 + receipt 字节记账、
+  预算压力下先剥摘录再丢文件）。

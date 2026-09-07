@@ -202,3 +202,79 @@ func TestBindWorkItemSeedsContinueKnownReads(t *testing.T) {
 		t.Fatalf("seeded re-read renewed signature: before=%q after=%q", before, after)
 	}
 }
+
+func TestImplementLeaseExhaustsAtLeasePlusRepairReserve(t *testing.T) {
+	state := startSampling(t, protocol.TurnIntentAnswer)
+	state.Policy.Convergence = ConvergencePolicyForStepLimit(64)
+	state.Policy.CompletionRepairLimit = 2
+	state.Policy.WorkspaceRepairLimit = 1
+	state.Policy.DeclarationRepairLimit = 1
+	state.Policy.VerificationRepairLimit = 1
+	state.Policy.ImplementNoProgressSamples = 6
+	state = apply(t, state, BindWorkItem{
+		Goal: "settle the transport regression",
+		KnownReads: map[string]WorkItemRead{
+			"socket_transport.cpp": {Window: "full"},
+		},
+	}).State
+	signature := FormatProgressSignature(state, 0, false)
+	state = apply(t, state, ObserveProgress{
+		Signature: signature, CompletedSamples: 0,
+	}).State
+	// Between finish-only and lease+repair-reserve the stage stays
+	// finish-only instead of trailing behind the 69-sample step lease.
+	for _, test := range []struct {
+		samples uint32
+		want    ProgressStage
+	}{
+		{samples: 6, want: ProgressStageFinishOnly},
+		{samples: 10, want: ProgressStageFinishOnly},
+		{samples: 11, want: ProgressStageExhausted},
+	} {
+		state = apply(t, state, ObserveProgress{
+			Signature: signature, CompletedSamples: test.samples,
+		}).State
+		if state.Progress.Stage != test.want {
+			t.Fatalf(
+				"samples=%d stage=%s, want %s",
+				test.samples, state.Progress.Stage, test.want,
+			)
+		}
+	}
+	if state.Convergence == nil ||
+		state.Convergence.Cause != ConvergenceNoProgress {
+		t.Fatalf("exhausted convergence = %+v", state.Convergence)
+	}
+}
+
+func TestImplementLeaseWithoutRepairReserveExhaustsAtLeasePlusOne(t *testing.T) {
+	state := startSampling(t, protocol.TurnIntentAnswer)
+	state.Policy.Convergence = ConvergencePolicyForStepLimit(64)
+	state.Policy.CompletionRepairLimit = 0
+	state.Policy.WorkspaceRepairLimit = 0
+	state.Policy.DeclarationRepairLimit = 0
+	state.Policy.VerificationRepairLimit = 0
+	state.Policy.ImplementNoProgressSamples = 6
+	state = apply(t, state, BindWorkItem{
+		Goal: "settle the transport regression",
+		KnownReads: map[string]WorkItemRead{
+			"socket_transport.cpp": {Window: "full"},
+		},
+	}).State
+	signature := FormatProgressSignature(state, 0, false)
+	state = apply(t, state, ObserveProgress{
+		Signature: signature, CompletedSamples: 0,
+	}).State
+	state = apply(t, state, ObserveProgress{
+		Signature: signature, CompletedSamples: 6,
+	}).State
+	if state.Progress.Stage != ProgressStageFinishOnly {
+		t.Fatalf("stage = %s, want finish_only", state.Progress.Stage)
+	}
+	state = apply(t, state, ObserveProgress{
+		Signature: signature, CompletedSamples: 7,
+	}).State
+	if state.Progress.Stage != ProgressStageExhausted {
+		t.Fatalf("stage = %s, want exhausted", state.Progress.Stage)
+	}
+}

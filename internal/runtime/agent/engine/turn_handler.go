@@ -819,9 +819,10 @@ func (s *Scope) Run(ctx context.Context) (result Result, resultErr error) {
 			sampleReason = promptcontext.SampleWorkspaceRepair
 			return false, nil
 		case turnkernel.StepActionRepairDeclaration:
-			if err := kernel.DiscardOutput("completion_declaration_repair"); err != nil {
-				return false, err
-			}
+			// The narration that triggered this repair is the candidate
+			// final answer: keep it so the follow-up declaration can seal
+			// the captured body with output_mode=preserve_provisional
+			// instead of rewriting it into the summary.
 			transaction = append(
 				transaction,
 				promptcontext.CompletionDeclarationFeedback(e.turn),

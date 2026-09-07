@@ -141,10 +141,42 @@ func TestRecoverableToolFailureClassification(t *testing.T) {
 			wantRecoverable: true, wantContains: "use_git_tool",
 		},
 		"permission denied": {
-			err: &policy.DecisionError{Code: "permission_denied", Reason: "write is denied"},
+			err:             &policy.DecisionError{Code: "permission_denied", Reason: "write is denied"},
+			wantRecoverable: true, wantContains: "choose_read_only_alternative",
 		},
 		"mode denied": {
-			err: &policy.DecisionError{Code: "mode_denied", Reason: "plan mode"},
+			err:             &policy.DecisionError{Code: "mode_denied", Reason: "plan mode"},
+			wantRecoverable: true, wantContains: "required_action=submit_plan",
+		},
+		"tool grant missing": {
+			err: &policy.DecisionError{
+				Code: "tool_grant_missing", Reason: "no matching managed tool grant",
+			},
+			wantRecoverable: true, wantContains: "choose_alternative_tool",
+		},
+		"repository rule denied": {
+			err: &policy.DecisionError{
+				Code: "repository_rule_denied", Reason: "repository deny rule matched",
+			},
+			wantRecoverable: true, wantContains: "retry_original=false",
+		},
+		"approval denied stays structured": {
+			err:             &policy.DecisionError{Code: "approval_denied", Reason: "user declined"},
+			wantRecoverable: true,
+			wantContains:    "choose_alternative_or_declare_incomplete",
+		},
+		"approval expired may re-ask": {
+			err: &policy.DecisionError{
+				Code: "approval_expired", Reason: "approval request expired",
+			},
+			wantRecoverable: true, wantContains: "required_action=request_approval_again",
+		},
+		"edit plan mismatch reproposes": {
+			err: &policy.DecisionError{
+				Code:   "edit_plan_mismatch",
+				Reason: "approval does not identify the displayed edit plan",
+			},
+			wantRecoverable: true, wantContains: "repropose_edit_for_approval",
 		},
 		"unread": {
 			err: fmt.Errorf(

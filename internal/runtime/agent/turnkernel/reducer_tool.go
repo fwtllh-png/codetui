@@ -26,8 +26,14 @@ func applyToolCalls(
 	}
 	transition.State.Completion = nil
 	transition.State.OutputEligibility = false
+	// A lone completion declaration seals the captured narration instead of
+	// invalidating it: acceptance decides between exact replacement and
+	// preserve_provisional, and a rejected declaration keeps the body for
+	// the repair to build on rather than forcing a full rewrite.
+	loneDeclaration := len(command.Calls) == 1 &&
+		command.Calls[0].Name == "turn_complete"
 	if len(current.ProvisionalOutput) != 0 &&
-		current.Convergence == nil {
+		current.Convergence == nil && !loneDeclaration {
 		transition.State.ProvisionalOutput = nil
 		transition.Events = append(
 			transition.Events,
