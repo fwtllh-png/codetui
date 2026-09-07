@@ -124,6 +124,12 @@ func Validate(state State) error {
 			state.ProfileRevision == 0) {
 		return errors.New("recovery relation is invalid")
 	}
+	if state.Continuation != nil &&
+		(state.Continuation.Sequence == 0 ||
+			strings.TrimSpace(state.Continuation.Handle) == "" ||
+			strings.TrimSpace(state.Continuation.Digest) == "") {
+		return errors.New("continuation cursor is invalid")
+	}
 	if state.Usage.Frozen != state.Context.Frozen {
 		return errors.New("usage and context freeze state disagree")
 	}
@@ -531,6 +537,10 @@ func cloneState(state State) State {
 		value := *state.PendingInput
 		cloned.PendingInput = &value
 	}
+	if state.Continuation != nil {
+		value := *state.Continuation
+		cloned.Continuation = &value
+	}
 	if state.Completion != nil {
 		value := *state.Completion
 		value.PendingActions = append(
@@ -538,7 +548,7 @@ func cloneState(state State) State {
 			state.Completion.PendingActions...,
 		)
 		value.ChangedPaths = append([]string(nil), state.Completion.ChangedPaths...)
-		value.QualityCalls = append([]string(nil), state.Completion.QualityCalls...)
+		value.VerificationCalls = append([]string(nil), state.Completion.VerificationCalls...)
 		cloned.Completion = &value
 	}
 	cloned.WorkItem = cloneWorkItem(state.WorkItem)

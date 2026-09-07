@@ -121,3 +121,21 @@ func retainCanceledHistory(messages []provider.Message) []provider.Message {
 	}
 	return retained
 }
+
+// retainedFailedTurnExchanges keeps the failed Turn's closed exchanges so a
+// Turn that explored for several rounds before failing does not lose its
+// completed evidence. Dangling tool traffic from the failing batch is dropped
+// by pair normalization; the prior durable history is appended separately by
+// the caller and must not be double-projected here.
+func retainedFailedTurnExchanges(
+	transaction []provider.Message,
+	turn uint64,
+) []provider.Message {
+	var currentTurn []provider.Message
+	for _, message := range transaction {
+		if message.Turn == turn {
+			currentTurn = append(currentTurn, message)
+		}
+	}
+	return retainCanceledHistory(currentTurn)
+}

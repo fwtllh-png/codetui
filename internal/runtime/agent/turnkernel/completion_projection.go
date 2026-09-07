@@ -14,14 +14,14 @@ func NewCompletionCandidate(
 	result tool.Result,
 	batchMutated bool,
 	batchSize int,
-	qualityCalls []string,
+	verificationCalls []string,
 ) CompletionCandidate {
 	candidate := CompletionCandidate{
-		CompletionCall: call.ID,
-		BatchMutated:   batchMutated,
-		BatchSize:      batchSize,
-		ToolError:      result.IsError,
-		QualityCalls:   append([]string(nil), qualityCalls...),
+		CompletionCall:    call.ID,
+		BatchMutated:      batchMutated,
+		BatchSize:         batchSize,
+		ToolError:         result.IsError,
+		VerificationCalls: append([]string(nil), verificationCalls...),
 	}
 	var declaration *tool.CompletionDeclaration
 	if result.Outcome != nil && result.Outcome.Facts != nil {
@@ -70,7 +70,7 @@ func BindCompletionDecision(
 			)
 			facts.Completion.VerificationCallIDs = append(
 				[]string(nil),
-				decision.QualityCalls...,
+				decision.VerificationCalls...,
 			)
 			facts.Completion.MutationRevision = decision.Mutation
 			facts.Completion.CallID = decision.CompletionCall

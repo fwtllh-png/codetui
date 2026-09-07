@@ -98,6 +98,11 @@ func (c *Controller) Observe(
 ) error {
 	now := time.Now()
 	metadata := Metadata(header, now)
+	if failure, ok := errors.AsType[*provider.Failure](err); ok &&
+		failure.Code != provider.FailureRateLimit &&
+		status == http.StatusTooManyRequests {
+		return attach(err, metadata, status)
+	}
 	c.mu.Lock()
 	state := c.state(key)
 	applyTokenHeaders(state, header, now)
@@ -119,10 +124,8 @@ func (c *Controller) Observe(
 		}
 		state.penalty = delay
 		state.nextRequest = later(state.nextRequest, time.Now().Add(delay))
-		if metadata == nil {
-			metadata = &protocol.RateLimitMetadata{}
-		}
-		metadata.RetryAfterMS = durationMilliseconds(delay)
+		// Local pacing lives only in route state. RetryAfterMS is reserved
+		// for provider headers and must not impersonate a Retry-After.
 	case status == http.StatusSwitchingProtocols ||
 		status >= 200 && status < 300:
 		if delay := retryDelay(metadata); delay > 0 {
@@ -195,14 +198,6 @@ func retryDelay(metadata *protocol.RateLimitMetadata) time.Duration {
 		return 0
 	}
 	return time.Duration(metadata.RetryAfterMS) * time.Millisecond
-}
-
-func durationMilliseconds(value time.Duration) uint64 {
-	milliseconds := value / time.Millisecond
-	if value%time.Millisecond != 0 {
-		milliseconds++
-	}
-	return uint64(max(milliseconds, 1))
 }
 
 func saturatingDouble(value time.Duration) time.Duration {

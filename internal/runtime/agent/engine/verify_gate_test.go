@@ -37,7 +37,15 @@ func (v *scriptedVerifier) Verify(
 		return verify.Receipt{}, v.err
 	}
 	index := min(len(v.requests)-1, len(v.receipts)-1)
-	return v.receipts[index], nil
+	if v.receipts[index].Status == verify.StatusUnavailable && len(request.Evidence) != 0 {
+		receipt, _ := verify.CommandEvidenceReceipt(request.Paths, request.MutationRevision, request.Evidence)
+		return receipt, nil
+	}
+	receipt := v.receipts[index]
+	if receipt.Status == verify.StatusUnavailable {
+		receipt.UncoveredPaths = append([]string(nil), request.Paths...)
+	}
+	return receipt, nil
 }
 
 func failedReceipt(message string) verify.Receipt {
@@ -207,7 +215,7 @@ func TestWorkspaceVerificationBlockRetainsDraftForContinue(t *testing.T) {
 		failedReceipt("value.txt:1:1: still wrong"),
 	}}
 	fixture := newVerifyGateFixture(t, VerifyOptions{
-		Mode: VerifyModeSoft, Scope: verify.ScopeDiagnostics, MaxRepairSteps: 1,
+		Mode: VerifyModeHard, Scope: verify.ScopeDiagnostics, MaxRepairSteps: 1,
 	}, verifier, 1, 3)
 
 	blocked, err := fixture.engine.RunForTurnWithIntentAndAttachments(
@@ -505,7 +513,7 @@ func TestWorkspaceChangeFailsClosedWhenVerificationIsUnavailable(t *testing.T) {
 		Message: "no post-edit diagnostics covered the changed files",
 	}}}
 	fixture := newVerifyGateFixture(t, VerifyOptions{
-		Mode: VerifyModeSoft, Scope: verify.ScopeDiagnostics,
+		Mode: VerifyModeHard, Scope: verify.ScopeDiagnostics,
 	}, verifier, 0, 3)
 
 	result, err := fixture.engine.RunForTurnWithIntentAndAttachments(
@@ -525,6 +533,30 @@ func TestWorkspaceChangeFailsClosedWhenVerificationIsUnavailable(t *testing.T) {
 	}
 	if result.State == Completed {
 		t.Fatalf("unavailable verification completed the turn: %+v", result)
+	}
+}
+
+func TestSoftWorkspaceVerificationReportsWithoutForcingExtraCommands(t *testing.T) {
+	for _, status := range []string{verify.StatusFailed, verify.StatusUnavailable} {
+		t.Run(status, func(t *testing.T) {
+			verifier := &scriptedVerifier{receipts: []verify.Receipt{{
+				Scope: verify.ScopeDiagnostics, Status: status, Message: "fixture verification " + status,
+			}}}
+			fixture := newVerifyGateFixture(t, VerifyOptions{
+				Mode: VerifyModeSoft, Scope: verify.ScopeDiagnostics, MaxRepairSteps: 3,
+			}, verifier, 0, 3)
+			result, err := fixture.engine.RunForTurnWithIntentAndAttachments(
+				t.Context(), "turn-soft", "edit",
+				protocol.TurnIntentWorkspaceChange, nil, nil,
+			)
+			if err != nil || result.State != Completed || result.Verification == nil ||
+				result.Verification.Status != status ||
+				result.Verification.Action != string(verifyActionReported) ||
+				result.Verification.RepairSteps != 0 || len(verifier.requests) != 1 ||
+				fixture.contents(t) != "after\n" {
+				t.Fatalf("soft mode forced repair or hid missing proof: result=%+v err=%v", result, err)
+			}
+		})
 	}
 }
 

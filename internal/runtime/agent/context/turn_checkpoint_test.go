@@ -86,14 +86,18 @@ func TestRenderTurnCheckpointCanceledKeepsNextPlanAndReadPaths(t *testing.T) {
 	}
 }
 
-func TestRenderTurnCheckpointFailedOmitsOpenWork(t *testing.T) {
+func TestRenderTurnCheckpointFailedKeepsPlanButOmitsUncommittedNarrative(t *testing.T) {
 	checkpoint, err := RenderTurnCheckpoint(CheckpointRenderInput{
 		Turn:    2,
 		Status:  CheckpointFailed,
 		Failure: "provider timeout",
 		Plan: Plan{Steps: []PlanStep{{
-			Title: "half-open tool chain", Status: StepInProgress,
+			Title: "finish parser tests", Status: StepInProgress,
 		}}},
+		Items: []NarrativeItem{{
+			Kind: NarrativeUnresolved, Text: "half-open tool chain",
+			SourceMessageIDs: []string{"pending"},
+		}},
 		Budget: 1024,
 	})
 	if err != nil {
@@ -102,7 +106,8 @@ func TestRenderTurnCheckpointFailedOmitsOpenWork(t *testing.T) {
 	if strings.Contains(checkpoint.Text, "half-open tool chain") {
 		t.Fatalf("failed checkpoint kept open work: %s", checkpoint.Text)
 	}
-	if !strings.Contains(checkpoint.Text, "provider timeout") {
+	if !strings.Contains(checkpoint.Text, "provider timeout") ||
+		!strings.Contains(checkpoint.Text, "next: finish parser tests") {
 		t.Fatalf("failed checkpoint lost failure: %s", checkpoint.Text)
 	}
 }

@@ -55,6 +55,7 @@ type scopeState struct {
 	mcpProjected         bool
 	diagnostics          []diagnostics.Receipt
 	verification         []verify.Evidence
+	pendingVerification  map[string]verify.Evidence
 	rollback             []string
 	budgetStage          uint8
 	toolSurfaceMaxBytes  int
@@ -82,7 +83,7 @@ type ScopeSnapshot struct {
 func newScopeState(engine *Engine) scopeState {
 	return scopeState{
 		scheduler: turnkernel.NewToolScheduler(engine.options.MaxToolConcurrent),
-		diff:      turnkernel.NewTurnDiffTracker(),
+		diff:      turnkernel.NewTurnDiffTracker(engine.options.Workspace),
 		mailbox:   turnkernel.NewMailbox[PendingInput](0),
 		requests:  turnkernel.NewRequestLedger(),
 		context:   engine.context.Clone(),

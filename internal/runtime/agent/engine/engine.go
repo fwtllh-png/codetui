@@ -111,6 +111,12 @@ type Engine struct {
 	approvalRecovery turnkernel.RecoveredInteraction[toolguard.ApprovalDecision]
 	inputRecovery    turnkernel.RecoveredInteraction[interact.Reply]
 
+	readResultMu sync.Mutex
+	readResults  map[string]readResultEntry
+	// readInvalidations explains, per admitted call, why a known read record
+	// could not be reused; guarded by readResultMu.
+	readInvalidations map[string]string
+
 	tokenCalibration *calibratedTokenEstimator
 
 	activeScope     *Scope
@@ -255,6 +261,7 @@ func New(options Options) (*Engine, error) {
 		tokenCalibration: calibration,
 		turnIDs:          make(map[string]uint64),
 		appliedDeltas:    make(map[string]string),
+		readResults:      make(map[string]readResultEntry),
 		stateEpoch:       1,
 		context:          agentcontext.NewAuthority(),
 	}

@@ -47,11 +47,11 @@ func (declarationWriteTool) Execute(
 	}, nil
 }
 
-type declarationQualityTool struct{}
+type declarationCommandTool struct{}
 
-func (declarationQualityTool) Descriptor() tool.Descriptor {
+func (declarationCommandTool) Descriptor() tool.Descriptor {
 	return tool.Descriptor{
-		Name: "quality_verify", Description: "record fixture verification",
+		Name: "exec_command", Description: "record fixture verification",
 		Visibility: tool.VisibleModel, Capability: tool.CapabilityProcess,
 		AccessMode: tool.AccessTree, ParallelPolicy: tool.ParallelSerial,
 		SandboxRequirement: tool.SandboxNone,
@@ -69,15 +69,15 @@ func (declarationQualityTool) Descriptor() tool.Descriptor {
 	}
 }
 
-func (declarationQualityTool) TrustedBinding() tool.TrustedBinding {
+func (declarationCommandTool) TrustedBinding() tool.TrustedBinding {
 	binding := tool.TrustedBindingFromDescriptor(
-		declarationQualityTool{}.Descriptor(),
+		declarationCommandTool{}.Descriptor(),
 	)
 	binding.ProducesVerificationEvidence = true
 	return binding
 }
 
-func (declarationQualityTool) Execute(
+func (declarationCommandTool) Execute(
 	_ context.Context, raw json.RawMessage,
 ) (tool.Result, error) {
 	var input struct {
@@ -86,7 +86,7 @@ func (declarationQualityTool) Execute(
 	if err := json.Unmarshal(raw, &input); err != nil {
 		return tool.Result{}, err
 	}
-	return qualityEvidenceResult(verify.StatusPassed, input.CoveredPaths), nil
+	return commandEvidenceResult(verify.StatusPassed, input.CoveredPaths), nil
 }
 
 func TestSubmittedPlanContinuesCurrentTurn(t *testing.T) {
@@ -516,13 +516,13 @@ func TestCompletionDeclarationBindsExactMutationRevision(t *testing.T) {
 		Completion: &declaration,
 	}}}
 	bindCompletionDecision(&accepted, turnkernel.CompletionDecision{
-		Accepted:       true,
-		Summary:        "done",
-		RequiredAction: "await_runtime_verification",
-		Mutation:       1,
-		ChangedPaths:   []string{"a.go"},
-		QualityCalls:   []string{"verify-1"},
-		CompletionCall: "complete-1",
+		Accepted:          true,
+		Summary:           "done",
+		RequiredAction:    "await_runtime_verification",
+		Mutation:          1,
+		ChangedPaths:      []string{"a.go"},
+		VerificationCalls: []string{"verify-1"},
+		CompletionCall:    "complete-1",
 	})
 	bound := accepted.Outcome.Facts.Completion
 	if bound == nil {
@@ -641,7 +641,7 @@ func TestVerificationRepairInvalidatesCompletionDeclaration(t *testing.T) {
 			"summary":"mutation complete",
 			"pending_actions":[]
 		}`),
-		toolCallStream("verify-1", "quality_verify", `{"covered_paths":["a.go"]}`),
+		toolCallStream("verify-1", "exec_command", `{"covered_paths":["a.go"]}`),
 		toolCallStream("complete-2", completiontool.Name, `{
 			"status":"complete",
 			"summary":"Implemented and verified.",
@@ -652,6 +652,7 @@ func TestVerificationRepairInvalidatesCompletionDeclaration(t *testing.T) {
 		Scope: verify.ScopeDiagnostics, Status: verify.StatusUnavailable,
 		Message: "no diagnostics covered a.go",
 	})
+	engine.options.Verify.Mode = VerifyModeHard
 	var completion *tool.CompletionDeclaration
 
 	result, err := engine.RunForTurnWithIntentAndAttachments(
@@ -690,7 +691,7 @@ func TestDeclarationRepairBudgetDoesNotResetWithoutAcceptedDeclaration(t *testin
 		}`),
 		textStream("I still need to declare completion."),
 		textStream("I still need to declare completion."),
-		toolCallStream("verify-1", "quality_verify", `{"covered_paths":["a.go"]}`),
+		toolCallStream("verify-1", "exec_command", `{"covered_paths":["a.go"]}`),
 		textStream("Quality evidence is now available."),
 		toolCallStream("complete-2", completiontool.Name, `{
 			"status":"complete",
@@ -702,6 +703,7 @@ func TestDeclarationRepairBudgetDoesNotResetWithoutAcceptedDeclaration(t *testin
 		Scope: verify.ScopeDiagnostics, Status: verify.StatusUnavailable,
 		Message: "no diagnostics covered a.go",
 	})
+	engine.options.Verify.Mode = VerifyModeHard
 
 	_, err := engine.RunForTurnWithIntentAndAttachments(
 		t.Context(), "turn-progress", "change a.go",
@@ -715,7 +717,7 @@ func TestDeclarationRepairBudgetDoesNotResetWithoutAcceptedDeclaration(t *testin
 	}
 }
 
-func declarationRegistry(t *testing.T, quality bool) *tool.Registry {
+func declarationRegistry(t *testing.T, withVerification bool) *tool.Registry {
 	t.Helper()
 	registry := tool.NewRegistry(nil, nil)
 	for _, executor := range []tool.Executor{
@@ -725,8 +727,8 @@ func declarationRegistry(t *testing.T, quality bool) *tool.Registry {
 			t.Fatal(err)
 		}
 	}
-	if quality {
-		if err := registry.Register(declarationQualityTool{}); err != nil {
+	if withVerification {
+		if err := registry.Register(declarationCommandTool{}); err != nil {
 			t.Fatal(err)
 		}
 	}

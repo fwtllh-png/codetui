@@ -42,9 +42,8 @@ func applyVerificationFinished(
 		return illegal(current, command, err.Error())
 	}
 	action := VerificationActionPassed
-	needsRepair := command.Status == VerificationFailed ||
-		(command.Status == VerificationUnavailable &&
-			current.Policy.VerificationMustPass)
+	needsRepair := command.Status != VerificationPassed &&
+		current.Policy.VerificationMode != "soft"
 	if needsRepair && current.Policy.VerificationRepairLimit != 0 {
 		err := spendRepairBudget(
 			transition,
@@ -81,9 +80,9 @@ func applyVerificationFinished(
 		EvidenceCalls:  append([]string(nil), command.EvidenceCalls...),
 		FailureMessage: command.Message,
 	}
-	if command.Status != VerificationPassed {
+	if command.Status != VerificationPassed && action != VerificationActionReported {
 		transition.State.Completion = nil
-	} else {
+	} else if command.Status == VerificationPassed {
 		transition.State.WorkItem.Open.UnverifiedPaths = nil
 	}
 	transition.State.WorkItem.RequiredAction = DeriveRequiredAction(
@@ -110,13 +109,13 @@ func applyCompletion(
 		return illegal(current, command, "completion call id is empty")
 	}
 	decision := CompletionDecision{
-		Summary:        candidate.Summary,
-		OutputMode:     candidate.OutputMode,
-		PendingActions: append([]string(nil), candidate.PendingActions...),
-		Mutation:       current.MutationRevision,
-		ChangedPaths:   changedPaths(current.Changes),
-		QualityCalls:   append([]string(nil), candidate.QualityCalls...),
-		CompletionCall: candidate.CompletionCall,
+		Summary:           candidate.Summary,
+		OutputMode:        candidate.OutputMode,
+		PendingActions:    append([]string(nil), candidate.PendingActions...),
+		Mutation:          current.MutationRevision,
+		ChangedPaths:      changedPaths(current.Changes),
+		VerificationCalls: append([]string(nil), candidate.VerificationCalls...),
+		CompletionCall:    candidate.CompletionCall,
 	}
 	switch {
 	case candidate.BatchMutated:
@@ -171,8 +170,6 @@ func applyCompletion(
 	case current.Intent == protocol.TurnIntentWorkspaceChange &&
 		current.MutationRevision == 0:
 		decision.Reason = "no_observed_changes"
-	case candidate.QualityRequired && len(candidate.QualityCalls) == 0:
-		decision.Reason = "quality_verification_required"
 	case candidate.OutputMode == "preserve_provisional" &&
 		len(current.ProvisionalOutput) == 0:
 		decision.Reason = "provisional_output_unavailable"
@@ -207,7 +204,7 @@ func applyCompletion(
 		decision.PendingActions...,
 	)
 	copy.ChangedPaths = append([]string(nil), decision.ChangedPaths...)
-	copy.QualityCalls = append([]string(nil), decision.QualityCalls...)
+	copy.VerificationCalls = append([]string(nil), decision.VerificationCalls...)
 	transition.State.Completion = &copy
 	transition.Events = append(transition.Events, Event{
 		Kind:     EventCompletionDecided,

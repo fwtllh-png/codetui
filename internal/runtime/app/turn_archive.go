@@ -31,7 +31,9 @@ func NewTurnTranscriptArchive(
 }
 
 // LookupTurn returns the staged history of the turn's own terminal envelope.
-// It returns a nil slice when the turn has no committed envelope.
+// A Turn that crashed before its terminal commit has no envelope delta; its
+// durable continuation snapshot is the remaining transcript source, so the
+// archive falls back to it before reporting no history.
 func (a *TurnTranscriptArchive) LookupTurn(
 	ctx context.Context,
 	turnID string,
@@ -40,24 +42,50 @@ func (a *TurnTranscriptArchive) LookupTurn(
 		return nil, nil
 	}
 	envelope, _, err := a.terminals.LoadTerminal(ctx, turnID)
-	if errors.Is(err, turnkernel.ErrTerminalEnvelopeMissing) {
-		return nil, nil
-	}
-	if err != nil {
+	if err != nil && !errors.Is(err, turnkernel.ErrTerminalEnvelopeMissing) {
 		return nil, fmt.Errorf("load terminal envelope: %w", err)
 	}
-	if len(envelope.SessionDelta) == 0 {
+	if err == nil && len(envelope.SessionDelta) != 0 {
+		encoded, err := agentcontext.DecodeContextEnvelope(envelope.SessionDelta)
+		if err != nil {
+			return nil, fmt.Errorf("decode context envelope: %w", err)
+		}
+		snapshot, err := agentcontext.LoadContextManifest(
+			ctx, a.blobs, encoded.Manifest,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("load context manifest: %w", err)
+		}
+		return snapshot.History, nil
+	}
+	return a.lookupContinuationTranscript(ctx, turnID)
+}
+
+// lookupContinuationTranscript recovers the in-turn conversation a crashed
+// Turn durably accepted. The kernel facts name the newest continuation
+// cursor; its CAS record carries the accepted messages.
+func (a *TurnTranscriptArchive) lookupContinuationTranscript(
+	ctx context.Context,
+	turnID string,
+) ([]provider.Message, error) {
+	facts, err := a.terminals.LoadDomainFacts(ctx, turnID)
+	if err != nil {
+		return nil, fmt.Errorf("load continuation facts: %w", err)
+	}
+	var cursor *turnkernel.ContinuationCursor
+	for index := range facts {
+		if facts[index].State.Continuation != nil {
+			cursor = facts[index].State.Continuation
+		}
+	}
+	if cursor == nil {
 		return nil, nil
 	}
-	encoded, err := agentcontext.DecodeContextEnvelope(envelope.SessionDelta)
-	if err != nil {
-		return nil, fmt.Errorf("decode context envelope: %w", err)
-	}
-	snapshot, err := agentcontext.LoadContextManifest(
-		ctx, a.blobs, encoded.Manifest,
+	record, err := agentcontext.LoadTurnContinuation(
+		ctx, a.blobs, cursor.Handle, cursor.Digest,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("load context manifest: %w", err)
+		return nil, fmt.Errorf("load turn continuation: %w", err)
 	}
-	return snapshot.History, nil
+	return record.Messages, nil
 }

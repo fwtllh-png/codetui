@@ -44,6 +44,7 @@ QCode 同时维护一本可执行的 Agent 工程知识书籍：把背景概念�
 5. [Agent 指南](./agent-guide.md)
 6. [CONTRIBUTING.md](../../CONTRIBUTING.md)
 7. [后续规划](./roadmap.md)
+8. [Turn 中断恢复与重复探索分析（待实施方案）](./turn-interruption-recovery-analysis.md)
 
 ## 文档事实来源
 

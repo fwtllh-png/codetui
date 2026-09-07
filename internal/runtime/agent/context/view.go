@@ -205,15 +205,27 @@ func ProjectContextViewFrom(
 	history []provider.Message,
 	start int,
 ) []provider.Message {
-	if start <= 0 {
-		return CloneMessages(history)
-	}
 	if start > len(history) {
 		return nil
 	}
+	start = max(0, start)
+	current := lastNonWorldTurn(history)
+	latest := make(map[string]int)
+	for index, message := range history {
+		if entry, _, ok := InspectWorldMessage(message); ok {
+			latest[entry.ID] = index
+		}
+	}
 	kept := make([]provider.Message, 0, len(history)-start+4)
 	for index, message := range history {
-		if index >= start || IsWorldStateMessage(message) {
+		if entry, _, world := InspectWorldMessage(message); world {
+			// Rebuild the historical baseline only at the next Turn boundary.
+			// Current-Turn patches remain append-only, including tombstones.
+			if current != 0 && message.Turn == current ||
+				latest[entry.ID] == index && entry.Present {
+				kept = append(kept, CloneMessage(message))
+			}
+		} else if index >= start {
 			kept = append(kept, CloneMessage(message))
 		}
 	}

@@ -262,18 +262,17 @@ type VerificationFinished struct {
 func (VerificationFinished) commandName() string { return "verification_finished" }
 
 type CompletionCandidate struct {
-	DeclarationValid bool
-	Status           string
-	Summary          string
-	OutputMode       string
-	PendingActions   []string
-	CompletionCall   string
-	BatchMutated     bool
-	BatchSize        int
-	ToolError        bool
-	QualityRequired  bool
-	QualityCalls     []string
-	PlanOpenSteps    int
+	DeclarationValid  bool
+	Status            string
+	Summary           string
+	OutputMode        string
+	PendingActions    []string
+	CompletionCall    string
+	BatchMutated      bool
+	BatchSize         int
+	ToolError         bool
+	VerificationCalls []string
+	PlanOpenSteps     int
 }
 
 type CompletionEvaluated struct {
@@ -295,6 +294,14 @@ type CancelRequested struct {
 }
 
 func (CancelRequested) commandName() string { return "cancel_requested" }
+
+type ContinuationRecorded struct {
+	Cursor ContinuationCursor
+}
+
+func (ContinuationRecorded) commandName() string {
+	return "continuation_recorded"
+}
 
 type RecoveryRequested struct {
 	SourceTurnID           string

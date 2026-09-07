@@ -1,6 +1,8 @@
 package agentcontext
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"strings"
 	"sync"
@@ -33,6 +35,8 @@ type Failure struct {
 	Name string
 	// Reason is the error or status as reported.
 	Reason string
+	// Digest identifies the full failure before display truncation.
+	Digest string `json:"Digest,omitempty"`
 	// Turn is when it was last seen.
 	Turn uint64
 	// Count is how many times this exact failure recurred. A repeat is the
@@ -106,8 +110,10 @@ func (f *Failures) note(kind string, turn uint64, name, reason string) {
 	if name == "" {
 		return
 	}
+	sum := sha256.Sum256([]byte(reason))
+	digest := hex.EncodeToString(sum[:])
+	key := kind + "\x00" + name + "\x00" + digest
 	reason = truncate(collapse(reason), failureReasonBytes)
-	key := kind + "\x00" + name + "\x00" + reason
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.records == nil {
@@ -124,7 +130,7 @@ func (f *Failures) note(kind string, turn uint64, name, reason string) {
 		delete(f.records, f.order[0])
 		f.order = f.order[1:]
 	}
-	f.records[key] = &Failure{Kind: kind, Name: name, Reason: reason, Turn: turn, Count: 1}
+	f.records[key] = &Failure{Kind: kind, Name: name, Reason: reason, Digest: digest, Turn: turn, Count: 1}
 	f.order = append(f.order, key)
 }
 
@@ -181,5 +187,5 @@ func truncate(text string, limit int) string {
 	if limit <= 3 {
 		return text[:limit]
 	}
-	return text[:limit-3] + "..."
+	return TruncateUTF8(text, limit-3) + "..."
 }

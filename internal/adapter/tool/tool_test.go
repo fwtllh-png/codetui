@@ -131,7 +131,7 @@ func TestResultStoreAppliesCallerTokenBudgetAndKeepsTypedHandle(t *testing.T) {
 		kind string
 	}{
 		{name: "file_read", kind: "read"},
-		{name: "quality_test", kind: "test"},
+		{name: "write_stdin", kind: "build"},
 		{name: "exec_command", kind: "build"},
 		{name: "custom_tool", kind: "generic"},
 	} {
@@ -666,14 +666,14 @@ func TestRegistryCloseReleasesExecutorResources(t *testing.T) {
 
 func TestModelResultRetainsEditRecoveryFacts(t *testing.T) {
 	input := Result{Content: "failed", IsError: true, Metadata: map[string]any{
-		"error_category":   "edit_precondition_miss",
-		"required_action":  "file_read",
-		"failed_change":    1,
-		"match_count":      0,
-		"start_line":       74,
-		"end_line":         80,
-		"current_excerpt":  "actual current text",
-		"canonical_path":   "/private/workspace/a.go",
+		"error_category":  "edit_precondition_miss",
+		"required_action": "file_read",
+		"failed_change":   1,
+		"match_count":     0,
+		"start_line":      74,
+		"end_line":        80,
+		"current_excerpt": "actual current text",
+		"canonical_path":  "/private/workspace/a.go",
 	}}
 	projected := ModelResult("file_apply", input)
 	for _, key := range []string{

@@ -326,7 +326,7 @@ func TestCompactGateMeasuresStatelessProviderProjection(t *testing.T) {
 
 func TestTokenWindowEmergencyLimitDoesNotForceFinishOnlyTools(t *testing.T) {
 	runtime := &scriptedProvider{streams: []provider.Stream{textStream("done")}}
-	registry := declarationRegistry(t, true)
+	registry := declarationRegistry(t, false)
 	if err := registry.Register(finishProcessTool{}); err != nil {
 		t.Fatal(err)
 	}
@@ -362,7 +362,7 @@ func TestTokenWindowFinishOnlyExecutesCompletionMutation(t *testing.T) {
 		toolCallStream("exec", "exec_command", `{}`),
 		textStream("bounded final answer"),
 	}}
-	registry := declarationRegistry(t, true)
+	registry := declarationRegistry(t, false)
 	if err := registry.Register(finishProcessTool{}); err != nil {
 		t.Fatal(err)
 	}

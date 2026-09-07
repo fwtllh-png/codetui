@@ -265,7 +265,7 @@ func TestEngineExhaustsRateLimitWaitBudgetWithoutSecondProbe(t *testing.T) {
 	_, err := engine.Run(t.Context(), "exhaust rate limit wait", nil)
 	problem := protocol.ProblemOf(err)
 	if problem == nil ||
-		problem.Message != "provider rate limit retry budget exhausted" ||
+		problem.Message != "provider rate limit retry budget exhausted: rate limited" ||
 		problem.Fault == nil ||
 		problem.Fault.Disposition != protocol.FaultRetryTurn {
 		t.Fatalf("exhausted wait = %#v", err)
@@ -298,7 +298,7 @@ func TestEngineExhaustsRateLimitAttemptBudget(t *testing.T) {
 	_, err := engine.Run(t.Context(), "exhaust rate limit attempts", nil)
 	problem := protocol.ProblemOf(err)
 	if problem == nil ||
-		problem.Message != "provider rate limit retry budget exhausted" {
+		problem.Message != "provider rate limit retry budget exhausted: rate limited" {
 		t.Fatalf("exhausted attempts = %#v", err)
 	}
 	if len(runtime.requests) != 2 {
@@ -341,7 +341,7 @@ func TestSharedRateLimitIsConsumedOnceAcrossEngines(t *testing.T) {
 	_, err := second.Run(t.Context(), "child rate limit", nil)
 	problem := protocol.ProblemOf(err)
 	if problem == nil ||
-		problem.Message != "provider rate limit retry budget exhausted" {
+		problem.Message != "provider rate limit retry budget exhausted: rate limited" {
 		t.Fatalf("second engine = %#v", err)
 	}
 	if len(secondRuntime.requests) != 1 {
@@ -406,7 +406,7 @@ func TestExhaustedProviderRetryBecomesUserRecoverable(t *testing.T) {
 		t.Fatalf("exhausted retry = %#v", recovered)
 	}
 	limited := protocol.ProblemOf(exhaustedRateLimitRetry(original))
-	if limited.Message != "provider rate limit retry budget exhausted" ||
+	if limited.Message != "provider rate limit retry budget exhausted: rate limited" ||
 		limited.Fault == nil ||
 		limited.Fault.Disposition != protocol.FaultRetryTurn {
 		t.Fatalf("exhausted rate limit = %#v", limited)
@@ -509,5 +509,34 @@ func TestCancellationDuringProviderDelayDoesNotCallProviderAgain(t *testing.T) {
 	}
 	if len(runtime.requests) != 1 {
 		t.Fatalf("provider requests = %d, want 1", len(runtime.requests))
+	}
+}
+
+func TestQuotaFailureClosesAttemptWithoutRetryAndKeepsResetReason(t *testing.T) {
+	message := "usage quota exhausted; resets at 2026-09-07 19:10:43"
+	runtime := &catalogMutationProvider{mutate: func() error {
+		return protocol.NewProblem(protocol.CodeResourceExhausted, message, false,
+			&provider.Failure{Code: provider.FailureQuota, Message: message, HTTPStatus: 429})
+	}}
+	engine := newEngine(t, runtime, tool.NewRegistry(nil, nil))
+	var statuses []string
+	retries := 0
+	_, err := engine.Run(t.Context(), "continue the work", func(event Event) error {
+		if event.ProviderRetry != nil {
+			retries++
+		}
+		if event.ModelExecution != nil && event.ModelExecution.Kind == "provider_attempt" {
+			statuses = append(statuses, event.ModelExecution.Status)
+		}
+		return nil
+	})
+	problem := protocol.ProblemOf(err)
+	if problem == nil || problem.Message != message || problem.Retryable ||
+		problem.Fault == nil || problem.Fault.Disposition != protocol.FaultResumeTurn {
+		t.Fatalf("quota terminal = %+v", problem)
+	}
+	if len(runtime.requests) != 1 || retries != 0 || len(statuses) != 2 ||
+		statuses[0] != protocol.ProviderAttemptStarted || statuses[1] != protocol.ProviderAttemptFailed {
+		t.Fatalf("requests=%d retries=%d statuses=%v", len(runtime.requests), retries, statuses)
 	}
 }

@@ -122,8 +122,8 @@ Capability、Access、Parallel、Sandbox 要求构造 Descriptor，避免 Tool �
 与 Handle Routing 仍归 Registry 所有。Kit 不做 Execution/Policy Decision：
 Registry Validation、Authorization、Guard、Sandbox Policy 都在 Kit 之外。
 
-Typed Boundary 是所有 Executor 的默认路径，包括 Tier-2 工具（quality、handle、
-automation 与 MCP Helper Call 现在解码为静态输入类型）。Schema 由他方拥有的
+Typed Boundary 是所有 Executor 的默认路径，进程、Handle、Automation 与 MCP
+Helper Call 均解码为静态输入类型。Schema 由他方拥有的
 Executor 以例外方式保留 Raw JSON，并必须在 `typed-boundary-exception:` 注释中说明
 原因——该注释由 Migration Guard Test 强制，例如 Schema 属于远端 Catalog 的
 Remote MCP Tool。

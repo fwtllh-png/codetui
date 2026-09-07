@@ -89,8 +89,8 @@ Child Engine，统一完成 Security Clone、Guard Factory 绑定、Workspace Id
 Required Controls 的 `ExecutionOperation`，并由 Runtime 共享的 `LeaseAuthority`
 签发单次 `ExecutionLease`。Guard 保留 `ExecuteBound` 作为兼容 Facade，但每个实际
 Attempt 都会先签发和消费 Lease，再把 Operation/Lease/Settlement 证据投影到
-`tool.result.execution`。Artifact/Process Broker 接管 Process Smoke 与 stdio
-MCP 生命周期；File/VCS Broker 接管模型文件工具、Agent/Chat Merge、生成型 Workspace
+`tool.result.execution`。Process Broker 接管 stdio MCP 生命周期，模型侧不再开放
+宿主进程冒烟工具；File/VCS Broker 接管模型文件工具、Agent/Chat Merge、生成型 Workspace
 输出和 Git Metadata Mutation。`workspacebroker.Runtime` 只组合窄能力，不把 Broker
 业务逻辑放入 `wire`。
 
@@ -387,9 +387,10 @@ Tool Result 在执行边界按硬输入容量、并行 Batch 大小与 ResultSto
 本次 Token Budget；完整原文保存在 Durable Content Store，模型只接收带稳定
 `result_get` Handle 的有界投影。若 `输入 + Output Reserve` 仍超出模型窗口，Gate
 先进一步缩减可重新获取的 Surface，再选择保持 Goal 和 Tool Pair 闭合的最小 History
-Replacement。Provider 请求只物化每个 World Section 的最新版本，并移除已闭合 Tool
-Round 中的旧状态文本和 Reasoning；Durable History、World Patch 链和原始 Tool
-Result 不被改写。
+Replacement。新 Turn 投影只保留每个历史 World Section 的最新有效版本；当前 Turn
+的 World 前缀保持追加语义，删除分区不会在下一轮重新出现。已闭合 Tool Round 的
+冗余 Assistant Text 可以投影掉，但工具调用所需的 Reasoning 与 Provider Replay
+保持不变。Durable History、World Patch 链和原始 Tool Result 不被改写。
 
 每个 Turn 在首次 Provider Sample 前冻结一份 Provider 可见的 World Snapshot。Turn
 内后续 Tool Result、Plan 更新、Evidence 与重复调用提醒仍写入权威状态和 Journal，
@@ -403,9 +404,14 @@ Trace 与 Receipt 保留逻辑公共前缀指标和最终 Transport Payload Dige
 与非 TTY 相同，Runtime 不再把非 TTY 命令挂到进程自行退出。`timeout_ms` 只杀进程
 组，不延长第一次等待。Cancel 会终止等待并回收进程组。
 
-Verification Runner 将节点结果绑定到声明输入的内容摘要、Workspace Revision 与
-Mutation Revision。只复用输入摘要未变的通过节点；失败或 unavailable 节点必须重跑，
-完成门禁仍要求当前 Mutation 的完整覆盖。Tool Result 在首次准入时定稿，后续 Sample 不改写已发送内容，以便 Provider
+`exec_command` 可声明验证用途与精确覆盖路径。Runtime 将真实命令、退出码、启动与
+结算调用、声明输入摘要、Workspace Revision 和 Mutation Revision 绑定为证据；
+长命令在 `write_stdin` 结束时结算。ReceiptRunner 只汇总证据和已有 diagnostics，
+不启动进程。Soft 模式如实报告未验证状态，Hard 策略才要求完成前满足覆盖约束。
+验证状态、缺失覆盖和调用 ID 来自同一次筛选与输入复核；相同命令针对不同路径的证据
+分别保留。重复失败不会因新的调用 ID 重置 Repair Budget，失败进程已经产生的文件
+变更也必须进入 Turn Diff。诊断只覆盖部分修改文件时不能声明整体通过。
+Tool Result 在首次准入时定稿，后续 Sample 不改写已发送内容，以便 Provider
 前缀缓存保持 append-only。超限结果第一次就带 Handle，全文留在 ResultStore，
 需要时用 `result_get` 取回。增量 Route 保持严格追加投影，不执行这些会破坏
 Response Chain 前缀的转换。
@@ -516,11 +522,25 @@ Turn 的 Work Item 一旦有 Known 或 Open，无签名变化的 Sample 达到
 不允许 `git_status` / `git_diff` 或整文件读取。已知路径整文件 `file_read` 与
 Continue 巡视 git 在工具执行前被拒绝，不续租。脏的 `git_status` /
 `git_diff` 或可见 Tail 没有那次读取都不是重读理由，应走 `turn_history` /
-`result_get`。取消 Checkpoint 保留下一项 Plan 与已读路径指针，失败仍不带半开
-Tool 链。Continue 恢复短 Work Item 胶囊（源 Turn、terminal、Known/Open、工具
+`result_get`。取消和失败 Checkpoint 均保留下一项 Plan 与已读路径指针，但不带未提交的半开
+Tool 链。缺少终态证据的旧 Checkpoint 只回封检索指针，状态为 `unknown`，
+不推断为 completed。Continue 恢复短 Work Item 胶囊（源 Turn、terminal、Known/Open、工具
 结论），Goal 是当前用户句，并在开局写入源 Turn 的 KnownReads。
 
 ## 可观测性架构
+
+Provider 配额耗尽与瞬时限流分开处理。OpenAI-compatible 的明确
+`insufficient_quota` 和 GLM 官方定义的配额业务码不会进入短期退避；GLM 数字码仅在
+对应 Provider 下解释，未知 429 不按文本推断为 TPM 或配额。配额终态使用
+`resource_exhausted`，保留 Provider 原因和重置时间文案，恢复动作为额度恢复后 Continue。
+`provider_retry_after_ms` 只保存 Provider Header 值；本地推导退避留在 Route Cooldown
+与实际等待字段。每次请求都有 started 和闭合事件，回执仅按 started 计数。
+
+模型侧不再提供 quality 工具、专项环境探针或“修改文件后才允许重试”的额外门禁。
+命令统一经过 exec_command/write_stdin 的 Guard、审批和 Sandbox；退出码来自真实
+进程，不通过输出关键词推断语言、环境故障或测试成功。Go 安装根目录与 macOS SDK
+准备属于沙箱能力建设，不属于验证工具。失败摘要优先展示诊断正文，去重身份来自
+完整原因摘要而非截断前缀。
 
 Runtime Event 是 Host Protocol，也是生命周期回放的权威记录。Terminal Envelope
 原子保存冻结 Measurement、Receipt、Session Delta 与 Projection Outbox。除此之外，

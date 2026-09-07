@@ -126,8 +126,7 @@ func planningDecision(
 
 func planningExemptTool(name string) bool {
 	switch name {
-	case "quality_test", "quality_diagnostics", "quality_review",
-		"quality_verify", "quality_process_smoke", "git_push":
+	case "git_push":
 		return true
 	default:
 		return false

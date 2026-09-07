@@ -12,6 +12,7 @@ import (
 	"github.com/fwtllh-png/QCode/internal/observability/diagnostics"
 	"github.com/fwtllh-png/QCode/internal/observability/trace"
 	"github.com/fwtllh-png/QCode/internal/persist/workspacejournal"
+	agentcontext "github.com/fwtllh-png/QCode/internal/runtime/agent/context"
 	promptcontext "github.com/fwtllh-png/QCode/internal/runtime/agent/prompt"
 	"github.com/fwtllh-png/QCode/internal/runtime/agent/turnkernel"
 	"github.com/fwtllh-png/QCode/internal/security/policy"
@@ -63,6 +64,9 @@ type ToolConfig struct {
 	OnNetworkAllow toolguard.NetworkAllow
 	Diagnostics    diagnostics.Runner
 	Verify         VerifyOptions
+	// VerificationOnly restricts verifier-role process launches to declared,
+	// workspace-read-only verification commands.
+	VerificationOnly bool
 
 	RequireCompletionDeclaration bool
 	MaxToolConcurrent            int
@@ -104,6 +108,10 @@ type LifecycleConfig struct {
 	// replacement. turn_history consults it when the in-memory history no
 	// longer contains the turn.
 	TurnTranscriptArchive TurnTranscriptArchive
+	// TurnContinuations stores the running Turn's accepted conversation so a
+	// restarted process can rebuild the in-turn context that never reached a
+	// terminal SessionDelta. Nil disables durable continuation.
+	TurnContinuations agentcontext.BlobStore
 }
 
 type Options struct {

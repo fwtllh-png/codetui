@@ -211,8 +211,8 @@ func (e *Engine) finalizeTerminalContext(
 ) (ContextBudgetSnapshot, error) {
 	candidate := cloneMessages(e.history)
 	original := cloneMessages(candidate)
-	// A failed transaction is deliberately excluded from candidate. Its last turn
-	// is therefore the most recent durable completed turn, which is safe to compact
+	// A failed Turn keeps its closed exchanges plus the failure note; the
+	// rest of candidate is prior durable history, which is safe to compact
 	// within as long as the compactor preserves closed tool pairs.
 	switch {
 	case completed:
@@ -223,7 +223,14 @@ func (e *Engine) finalizeTerminalContext(
 		original = cloneMessages(candidate)
 		e.sealClosedTurnMemory(agentcontext.CheckpointCanceled, nil, "canceled")
 	case failure != nil && !errors.Is(failure, context.Canceled):
-		candidate = append(candidate, e.failedTurnContextMessage(transaction, failure))
+		candidate = append(
+			candidate,
+			retainedFailedTurnExchanges(transaction, e.turn)...,
+		)
+		candidate = append(
+			candidate,
+			e.failedTurnContextMessage(transaction, failure),
+		)
 		original = cloneMessages(candidate)
 		compaction := e.context.Compaction()
 		compaction.State = nil

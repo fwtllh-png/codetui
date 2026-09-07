@@ -22,7 +22,7 @@ func TestNormalizeEffectAndRisk(t *testing.T) {
 		},
 		{
 			name: "strong sandbox read-only process",
-			call: effectInvocation("quality_verify", CapabilityProcess, tool.AccessTree, tool.SandboxStrong,
+			call: effectInvocation("exec_command", CapabilityProcess, tool.AccessTree, tool.SandboxStrong,
 				tool.Resource{Kind: "process", ID: "workspace", Access: tool.AccessRead}),
 			kind: EffectProcessReadOnly, risk: RiskLow,
 		},
@@ -109,7 +109,7 @@ func TestEffectRiskDrivesApprovalWithoutToolNameExceptions(t *testing.T) {
 		},
 		{
 			name: "suggest verify allows", permission: PermissionSuggest,
-			call: effectInvocation("quality_verify", CapabilityProcess, tool.AccessTree, tool.SandboxStrong,
+			call: effectInvocation("exec_command", CapabilityProcess, tool.AccessTree, tool.SandboxStrong,
 				tool.Resource{Kind: "process", ID: "workspace", Access: tool.AccessRead}),
 			want: ActionAllow,
 		},
@@ -172,7 +172,7 @@ func TestEffectRiskDrivesApprovalWithoutToolNameExceptions(t *testing.T) {
 			name:       "auto strong loopback fixture auto reviews",
 			permission: PermissionAuto,
 			call: effectInvocation(
-				"quality_test",
+				"exec_command",
 				CapabilityProcess,
 				tool.AccessTree,
 				tool.SandboxStrong,

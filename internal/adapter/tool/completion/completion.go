@@ -67,7 +67,11 @@ func (*Tool) Descriptor() tool.Descriptor {
 				"pending_actions": map[string]any{
 					"type": "array", "maxItems": 32,
 					"items": map[string]any{
-						"type": "string", "minLength": 1, "maxLength": 256,
+						// One pending action is a prose bullet; the bound
+						// matches the runtime's bounded-prose length and
+						// stays far below the summary ceiling so an action
+						// cannot become the answer itself.
+						"type": "string", "minLength": 1, "maxLength": 512,
 					},
 				},
 			},

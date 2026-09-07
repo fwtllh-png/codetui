@@ -503,22 +503,24 @@ Mode 写入 TOML；Posture 是 Web Host 启动决策，通过参数提供。二�
 验证模式：
 
 - `off`：不运行 Verify Gate；
-- `soft`：收集并报告结论，但当 Turn Contract 要求验证时仍会阻止完成；
+- `soft`：收集并报告失败或未验证状态，不强制增加修复轮次，也不阻止完成；
 - `hard`：修复预算耗尽后强制执行结论。
 
-`workspace_change` 与显式 Completion Contract 始终要求验证。其无进展 Repair Budget
-耗尽后，无论配置 Mode 为何，Turn 都会进入 `blocked`，Journal 则保留为可恢复 Draft。
+`workspace_change` 和 Completion Contract 不再隐式覆盖验证模式。只有显式 `hard`
+策略要求阻止未验证的完成；失败后遵循配置的恢复或回滚策略。Soft 完成不会把
+`unavailable`、`failed` 改写成 `passed`。
 
 验证范围：
 
 - `diagnostics`：语言或编辑器诊断；
-- `repository`：自动探测或显式指定的仓库命令；
-- `affected`：根据变更路径推断的检查。
+- `repository`：收集仓库验证命令的实际执行证据；
+- `affected`：收集覆盖变更路径的实际执行证据。
 
-Affected Verification 支持 Go Package Test、JavaScript/TypeScript Test File、Python
-pytest File 和 Rust Cargo Test。Build/Lock Manifest 变更会扩大到对应语言的仓库级
-Suite。每个 `turn.verification` Check 都包含命令推导原因。无法识别 Topology 的路径会
-明确报告 `unavailable`，不会静默成为绿色结果。
+命令统一由模型通过 `exec_command` 执行并声明 `verification`、`covered_paths`；
+长命令通过 `write_stdin` 结算。Runtime 不再自动探测语言或另起进程重复执行检查。
+若设置 `execution.verify.command`，现有 `{paths}`、`{packages}` 显式模板仍可使用，
+但该命令现在是所需证据的约束和执行提示；只有匹配命令的当前输入证据能够满足它。
+普通命令没有验证声明时不自动提供覆盖证明。
 
 只有仓库验证命令在目标沙箱内稳定可复现时，才应使用 `hard`。
 

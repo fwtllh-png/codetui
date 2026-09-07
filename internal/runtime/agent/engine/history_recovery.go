@@ -574,6 +574,15 @@ func (e *Engine) Fork() (*Engine, error) {
 	forked.viewFold = e.viewFold
 	forked.mailboxHold = append([]PendingInput(nil), e.mailboxHold...)
 	forked.turn = e.turn
+	e.readResultMu.Lock()
+	forked.readResults = make(
+		map[string]readResultEntry,
+		len(e.readResults),
+	)
+	for path, entry := range e.readResults {
+		forked.readResults[path] = entry
+	}
+	e.readResultMu.Unlock()
 	forked.context = e.context.Clone()
 	forked.context.SetWindow(forkWindow)
 	forked.historyTurns = agentcontext.CloneHistoryTurns(e.historyTurns)

@@ -16,6 +16,7 @@ const (
 	CheckpointCompleted = "completed"
 	CheckpointFailed    = "failed"
 	CheckpointCanceled  = "canceled"
+	CheckpointUnknown   = "unknown"
 
 	TurnHistoryToolName = "turn_history"
 	TurnHistorySource   = "runtime.turn_history"
@@ -87,7 +88,7 @@ func (c TurnCheckpoint) Validate() error {
 		return errors.New("turn checkpoint turn is required")
 	}
 	switch c.Status {
-	case CheckpointCompleted, CheckpointFailed, CheckpointCanceled:
+	case CheckpointCompleted, CheckpointFailed, CheckpointCanceled, CheckpointUnknown:
 	default:
 		return errors.New("turn checkpoint status is invalid")
 	}
@@ -162,7 +163,7 @@ func RenderTurnCheckpoint(input CheckpointRenderInput) (TurnCheckpoint, error) {
 		status = CheckpointCompleted
 	}
 	switch status {
-	case CheckpointCompleted, CheckpointFailed, CheckpointCanceled:
+	case CheckpointCompleted, CheckpointFailed, CheckpointCanceled, CheckpointUnknown:
 	default:
 		return TurnCheckpoint{}, errors.New("turn checkpoint status is invalid")
 	}
@@ -209,10 +210,7 @@ func RenderTurnCheckpoint(input CheckpointRenderInput) (TurnCheckpoint, error) {
 			})
 		}
 	}
-	if status == CheckpointFailed {
-		body.Open = nil
-	}
-	if status == CheckpointCanceled {
+	if status == CheckpointCanceled || status == CheckpointFailed {
 		body.Open = nil
 		if next := FormatCanceledCheckpointNext(input.Plan); next != "" {
 			body.Open = []CheckpointOpenItem{{

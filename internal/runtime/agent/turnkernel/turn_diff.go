@@ -2,6 +2,7 @@ package turnkernel
 
 import (
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -23,12 +24,17 @@ type TurnDiffEntry struct {
 
 // TurnDiffTracker accumulates net file-tool changes for the current turn.
 type TurnDiffTracker struct {
-	mu      sync.Mutex
-	entries map[string]TurnDiffEntry
+	mu        sync.Mutex
+	entries   map[string]TurnDiffEntry
+	workspace string
 }
 
-func NewTurnDiffTracker() *TurnDiffTracker {
-	return &TurnDiffTracker{entries: make(map[string]TurnDiffEntry)}
+func NewTurnDiffTracker(workspace ...string) *TurnDiffTracker {
+	tracker := &TurnDiffTracker{entries: make(map[string]TurnDiffEntry)}
+	if len(workspace) != 0 {
+		tracker.workspace = workspace[0]
+	}
+	return tracker
 }
 
 func (t *TurnDiffTracker) Reset() {
@@ -48,10 +54,31 @@ func (t *TurnDiffTracker) Record(entry TurnDiffEntry) {
 	if entry.Path == "" {
 		return
 	}
+	entry.Path = filepath.Clean(entry.Path)
+	if filepath.IsAbs(entry.Path) && t.workspace != "" {
+		if relative, err := filepath.Rel(t.workspace, entry.Path); err == nil &&
+			relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+			entry.Path = relative
+		}
+	}
+	entry.Path = filepath.ToSlash(entry.Path)
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.entries == nil {
 		t.entries = make(map[string]TurnDiffEntry)
+	}
+	if previous, exists := t.entries[entry.Path]; exists {
+		switch {
+		case previous.Kind == tool.WorkspaceCreated && entry.Kind == tool.WorkspaceDeleted:
+			delete(t.entries, entry.Path)
+			return
+		case previous.Kind == tool.WorkspaceCreated:
+			entry.Kind = tool.WorkspaceCreated
+		case previous.Kind == tool.WorkspaceDeleted && entry.Kind == tool.WorkspaceCreated:
+			entry.Kind = tool.WorkspaceModified
+		}
+		entry.Added += previous.Added
+		entry.Removed += previous.Removed
 	}
 	t.entries[entry.Path] = entry
 }

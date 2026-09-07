@@ -62,6 +62,22 @@ func (e *Engine) providerRetry(
 }
 
 func exhaustedProviderRetry(err error) error {
+	failure := providerwire.ClassifyFailure(err, false)
+	if failure.Code == provider.FailureQuota {
+		problem := protocol.NewFault(
+			protocol.CodeResourceExhausted, failure.Message, false,
+			protocol.FaultMetadata{
+				Origin: protocol.FaultOriginProvider, Stage: protocol.FaultStageModelSample,
+				Disposition: protocol.FaultResumeTurn, SideEffects: protocol.SideEffectUnchanged,
+				RetryOwner: protocol.FaultRetryOwnerHost, ResumeHint: protocol.FaultResumeResumeTurn,
+				RecoveryAction: "wait for the provider quota reset or restore the subscription/balance, then continue from the durable checkpoint",
+			}, err,
+		)
+		if original := protocol.ProblemOf(err); original != nil {
+			problem.HTTPStatus, problem.RateLimit = original.HTTPStatus, original.RateLimit
+		}
+		return problem
+	}
 	if problem, ok := errors.AsType[*protocol.Problem](err); ok &&
 		!problem.Retryable {
 		problem.Fault = &protocol.FaultMetadata{
@@ -90,7 +106,8 @@ func exhaustedRateLimitRetry(err error) error {
 	recovered := exhaustedProviderRetry(err)
 	var problem *protocol.Problem
 	if errors.As(recovered, &problem) && problem != nil {
-		problem.Message = "provider rate limit retry budget exhausted"
+		problem.Message = "provider rate limit retry budget exhausted: " +
+			providerwire.ClassifyFailure(err, false).Message
 	}
 	return recovered
 }

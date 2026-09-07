@@ -189,7 +189,9 @@ func (r *Recorder) Observe(event agentengine.Event) {
 	if event.ModelExecution != nil {
 		switch event.ModelExecution.Kind {
 		case "provider_attempt":
-			r.modelExecution.ProviderAttempts++
+			if event.ModelExecution.Status == protocol.ProviderAttemptStarted {
+				r.modelExecution.ProviderAttempts++
+			}
 		case "model_sample":
 			r.modelExecution.ModelSamples++
 			reason := event.ModelExecution.Reason
@@ -290,8 +292,9 @@ func (r *Recorder) observeTool(event agentengine.Event) {
 	switch event.ToolCall.Name {
 	case "turn_complete", "update_plan", "submit_plan", "request_user_input":
 		kind = "control"
-	case "quality_test", "quality_diagnostics", "quality_review", "quality_verify",
-		"quality_process_smoke":
+	}
+	if event.Result.Outcome != nil && event.Result.Outcome.Facts != nil &&
+		event.Result.Outcome.Facts.Verification != nil {
 		kind = "verification"
 	}
 	if r.toolExecution == nil {

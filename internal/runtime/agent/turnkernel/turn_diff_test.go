@@ -1,11 +1,33 @@
 package turnkernel
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/fwtllh-png/QCode/internal/adapter/tool"
 )
+
+func TestTurnDiffTracksNetExistenceAndCanonicalPaths(t *testing.T) {
+	root := t.TempDir()
+	tracker := NewTurnDiffTracker(root)
+	tracker.Record(TurnDiffEntry{Path: filepath.Join(root, "new.go"), Kind: "created", Added: 4})
+	tracker.Record(TurnDiffEntry{Path: "./new.go", Kind: "modified", Added: 2, Removed: 1})
+	got := tracker.Snapshot()
+	if len(got) != 1 || got[0].Path != "new.go" || got[0].Kind != "created" ||
+		got[0].Added != 6 || got[0].Removed != 1 {
+		t.Fatalf("created then modified: %+v", got)
+	}
+	tracker.Record(TurnDiffEntry{Path: "new.go", Kind: "deleted"})
+	if len(tracker.Snapshot()) != 0 {
+		t.Fatal("created then deleted remained in net diff")
+	}
+	tracker.Record(TurnDiffEntry{Path: "existing.go", Kind: "deleted"})
+	tracker.Record(TurnDiffEntry{Path: "existing.go", Kind: "created"})
+	if got := tracker.Snapshot(); len(got) != 1 || got[0].Kind != "modified" {
+		t.Fatalf("replacement: %+v", got)
+	}
+}
 
 func TestTurnDiffTrackerRecordAndFormat(t *testing.T) {
 	t.Parallel()

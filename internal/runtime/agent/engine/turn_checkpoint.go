@@ -82,26 +82,6 @@ func (e *Engine) currentTurn() uint64 {
 	return e.turn
 }
 
-func (e *Engine) sessionStateHintMissing(history []provider.Message) bool {
-	return e.omittedTurnHintMissing(history) || e.resumeHintMissing(history)
-}
-
-func (e *Engine) resumeHintMissing(history []provider.Message) bool {
-	hint := e.resumeHintText()
-	if hint == "" {
-		return false
-	}
-	return !agentcontext.HistoryHasSessionStateHint(history, hint)
-}
-
-func (e *Engine) resumeHintText() string {
-	return agentcontext.FormatResumeHint(
-		e.currentPlan(),
-		e.resumeReadPaths(),
-		e.locatedSites(),
-	)
-}
-
 func (e *Engine) currentPlan() agentcontext.Plan {
 	e.planMu.Lock()
 	defer e.planMu.Unlock()
@@ -124,16 +104,6 @@ func (e *Engine) resumeTruthEntities() []agentcontext.TruthEntity {
 		return nil
 	}
 	return []agentcontext.TruthEntity{entity}
-}
-
-func (e *Engine) omittedTurnHintMissing(history []provider.Message) bool {
-	hint := agentcontext.FormatOmittedTurnHint(
-		agentcontext.OmittedTurnIDs(history, e.recentTailTurns()),
-	)
-	if hint == "" {
-		return false
-	}
-	return !agentcontext.HistoryHasSessionStateHint(history, hint)
 }
 
 func (e *Engine) omittedTurnTruthEntities(
@@ -170,7 +140,7 @@ func (e *Engine) ensureClosedTurnCheckpoints() {
 		checkpoint, err := agentcontext.RenderTurnCheckpoint(
 			agentcontext.CheckpointRenderInput{
 				Turn:   turn,
-				Status: agentcontext.CheckpointCompleted,
+				Status: agentcontext.CheckpointUnknown,
 				Budget: budget,
 			},
 		)
@@ -279,7 +249,7 @@ func (e *Engine) sealClosedTurnMemory(
 		items = artifact.Body.Items
 	}
 	var readPaths []string
-	if status == agentcontext.CheckpointCanceled {
+	if status == agentcontext.CheckpointCanceled || status == agentcontext.CheckpointFailed {
 		readPaths = agentcontext.ReadPathsFromWorkingSet(
 			e.workingLedger().Select(turn, e.options.WorkingSetLimit),
 		)

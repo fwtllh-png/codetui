@@ -29,6 +29,7 @@ func (b *memBlobs) Get(_ context.Context, handle string) ([]byte, error) {
 
 type stubTerminalEnvelopeStore struct {
 	envelopes map[string]turnkernel.TerminalEnvelope
+	facts     map[string][]turnkernel.DomainFact
 }
 
 func (s *stubTerminalEnvelopeStore) AppendDomainFacts(
@@ -38,9 +39,13 @@ func (s *stubTerminalEnvelopeStore) AppendDomainFacts(
 }
 
 func (s *stubTerminalEnvelopeStore) LoadDomainFacts(
-	context.Context, string,
+	_ context.Context,
+	turnID string,
 ) ([]turnkernel.DomainFact, error) {
-	return nil, nil
+	return append(
+		[]turnkernel.DomainFact(nil),
+		s.facts[turnID]...,
+	), nil
 }
 
 func (s *stubTerminalEnvelopeStore) CommitTerminal(
@@ -137,5 +142,63 @@ func TestTurnTranscriptArchiveRecoversStagedHistory(t *testing.T) {
 	}
 	if NewTurnTranscriptArchive(terminals, nil) != nil {
 		t.Fatal("archive built without blob store")
+	}
+}
+
+// A Turn that crashed before its terminal commit has no envelope delta; its
+// durable continuation snapshot is the transcript turn_history recovers.
+func TestTurnTranscriptArchiveFallsBackToContinuation(t *testing.T) {
+	blobs := &memBlobs{values: map[string][]byte{}}
+	goal := provider.TextMessage(provider.RoleUser, "crashed goal")
+	goal.Turn = 4
+	evidence := provider.TextMessage(provider.RoleAssistant, "found the defect")
+	evidence.Turn = 4
+	record := agentcontext.TurnContinuation{
+		Version:           agentcontext.ContinuationVersion,
+		TurnID:            "turn-crashed",
+		Sequence:          2,
+		TurnNumber:        4,
+		SessionRevision:   3,
+		StateEpoch:        2,
+		WorkspaceIdentity: "workspace:test",
+		ProfileRevision:   1,
+		Provider:          "provider-a",
+		Model:             "model-a",
+		Messages:          []provider.Message{goal, evidence},
+	}
+	ref, err := agentcontext.StoreTurnContinuation(t.Context(), blobs, record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cursor := turnkernel.ContinuationCursor{
+		Sequence: record.Sequence, Handle: ref.Handle, Digest: ref.Digest,
+	}
+	factState := turnkernel.State{Continuation: &cursor}
+	terminals := &stubTerminalEnvelopeStore{
+		facts: map[string][]turnkernel.DomainFact{
+			"turn-crashed": {{
+				TurnID:      "turn-crashed",
+				Sequence:    1,
+				Command:     "continuation_recorded",
+				State:       factState,
+				StateDigest: "digest",
+			}},
+		},
+	}
+	archive := NewTurnTranscriptArchive(terminals, blobs)
+
+	history, err := archive.LookupTurn(t.Context(), "turn-crashed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(history) != 2 ||
+		history[0].Text() != "crashed goal" ||
+		history[1].Text() != "found the defect" {
+		t.Fatalf("continuation transcript = %+v", history)
+	}
+
+	empty, err := archive.LookupTurn(t.Context(), "turn-no-facts")
+	if err != nil || empty != nil {
+		t.Fatalf("turn without envelope or continuation = %+v err=%v", empty, err)
 	}
 }

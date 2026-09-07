@@ -180,12 +180,6 @@
       "reason": "Guard-authorized read-only Git metadata commands."
     },
     {
-      "path": "internal/adapter/tool/quality/quality.go",
-      "categories": ["process"],
-      "owner": "quality tool",
-      "reason": "Guard-authorized sandboxed verification commands."
-    },
-    {
       "path": "internal/adapter/tool/shell/shell.go",
       "categories": ["process"],
       "owner": "shell tool",
@@ -196,12 +190,6 @@
       "categories": ["process"],
       "owner": "diagnostics runner",
       "reason": "Guard-triggered sandboxed post-edit diagnostics."
-    },
-    {
-      "path": "internal/observability/verify/verify.go",
-      "categories": ["process"],
-      "owner": "verification runner",
-      "reason": "Runtime-triggered sandboxed verification commands."
     },
     {
       "path": "internal/orchestration/chatmerge/service.go",

@@ -22,7 +22,7 @@ func TestSandboxCompilerUsesPrivateTempAndHostTmpRemainsDenied(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(
 		filepath.Join(root, "probe.cc"),
-		[]byte("int probe() { return 42; }\n"),
+		[]byte("#include <cassert>\n#include <vector>\nint main() { std::vector<int> v(1, 42); assert(v[0] == 42); }\n"),
 		0o600,
 	); err != nil {
 		t.Fatal(err)
@@ -67,7 +67,7 @@ func TestSandboxCompilerUsesPrivateTempAndHostTmpRemainsDenied(t *testing.T) {
 			`printf '%%s\n' "$TMPDIR" "$TMP" "$TEMP"; `+
 				`printf private > "$TMPDIR/probe"; `+
 				`if printf escaped > %q; then exit 91; fi; `+
-				`/usr/bin/xcrun --run clang++ -c probe.cc -o "$TMPDIR/probe.o"`,
+				`clang++ probe.cc -o "$TMPDIR/probe.o" && "$TMPDIR/probe.o"`,
 			hostTmpTarget,
 		),
 		Env: []string{
@@ -97,6 +97,14 @@ func TestSandboxCompilerUsesPrivateTempAndHostTmpRemainsDenied(t *testing.T) {
 			t.Fatalf("private temp artifact %s: %v", name, err)
 		}
 	}
+	baseline, baselineErr := Run(ctx, Options{
+		Dir: workspace.Root(), DirFile: directory,
+		Command: `unset SDKROOT
+clang++ probe.cc -o "$TMPDIR/probe-without-sdk"`,
+		Sandbox: backend, RequireSandbox: true, WorkspaceReadOnly: true,
+	})
+	t.Logf("without projected SDKROOT: exit=%d error=%v stderr=%s",
+		baseline.ExitCode, baselineErr, baseline.Stderr)
 	if _, err := os.Stat(hostTmpTarget); !os.IsNotExist(err) {
 		t.Fatalf("host /tmp write escaped sandbox: %v", err)
 	}

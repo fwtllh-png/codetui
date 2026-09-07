@@ -78,15 +78,19 @@ type recoveryReceiptEvidence struct {
 }
 
 type RecoveryEvidenceCapsule struct {
-	Version      int                      `json:"version"`
-	SourceTurnID protocol.TurnID          `json:"source_turn_id"`
-	Intent       protocol.TurnIntent      `json:"intent"`
-	Terminal     string                   `json:"terminal"`
-	WorkItem     *RecoveryWorkItemCapsule `json:"work_item,omitempty"`
-	Outcomes     []RecoveryOutcome        `json:"outcomes,omitempty"`
-	Tools        []RecoveryToolEvidence   `json:"closed_tools,omitempty"`
-	OmittedTools int                      `json:"omitted_tools,omitempty"`
-	Receipt      *recoveryReceiptEvidence `json:"receipt,omitempty"`
+	Version      int                 `json:"version"`
+	SourceTurnID protocol.TurnID     `json:"source_turn_id"`
+	Intent       protocol.TurnIntent `json:"intent"`
+	Terminal     string              `json:"terminal"`
+	// PartialOutput carries the bounded model output a crash-interrupted
+	// Turn confirmed but never terminalized, so the navigation capsule keeps
+	// the interrupted conclusion instead of only the tool ledger.
+	PartialOutput string                   `json:"partial_output,omitempty"`
+	WorkItem      *RecoveryWorkItemCapsule `json:"work_item,omitempty"`
+	Outcomes      []RecoveryOutcome        `json:"outcomes,omitempty"`
+	Tools         []RecoveryToolEvidence   `json:"closed_tools,omitempty"`
+	OmittedTools  int                      `json:"omitted_tools,omitempty"`
+	Receipt       *recoveryReceiptEvidence `json:"receipt,omitempty"`
 }
 
 func (r *Service) PrepareTurnRecovery(
@@ -298,6 +302,7 @@ func (r *Service) PrepareTurnRecovery(
 			terminalState,
 			closedTools,
 			sourceReceipt,
+			partialOutput.String(),
 		); capsule != "" {
 			prompt += "\n\n<recovery_evidence>\n" + capsule +
 				"\n</recovery_evidence>"
@@ -454,15 +459,17 @@ func RenderRecoveryEvidence(
 	terminal string,
 	tools []RecoveryToolEvidence,
 	receipt *protocol.ExecutionReceiptData,
+	partialOutput string,
 ) string {
 	capsule := RecoveryEvidenceCapsule{
-		Version:      2,
-		SourceTurnID: sourceTurnID,
-		Intent:       intent,
-		Terminal:     terminal,
-		WorkItem:     recoveryWorkItemCapsule(tools, receipt),
-		Outcomes:     recoveryOutcomes(tools),
-		Tools:        append([]RecoveryToolEvidence(nil), tools...),
+		Version:       3,
+		SourceTurnID:  sourceTurnID,
+		Intent:        intent,
+		Terminal:      terminal,
+		PartialOutput: partialOutput,
+		WorkItem:      recoveryWorkItemCapsule(tools, receipt),
+		Outcomes:      recoveryOutcomes(tools),
+		Tools:         append([]RecoveryToolEvidence(nil), tools...),
 	}
 	if receipt != nil {
 		capsule.Receipt = &recoveryReceiptEvidence{
@@ -499,6 +506,11 @@ func RenderRecoveryEvidence(
 		case capsule.Receipt != nil && len(capsule.Receipt.Changes) != 0:
 			capsule.Receipt.Changes =
 				capsule.Receipt.Changes[:len(capsule.Receipt.Changes)-1]
+		case capsule.PartialOutput != "":
+			// The interrupted conclusion is the last evidence to drop: the
+			// tool ledger above is recoverable from the event log, the
+			// partial output is not.
+			capsule.PartialOutput = ""
 		default:
 			return ""
 		}
@@ -545,7 +557,7 @@ func recoveryWorkItemCapsule(
 	case len(sessions) > 0:
 		action = "write_stdin"
 	case len(edits) > 0:
-		action = "quality_test"
+		action = "exec_command"
 	case len(reads) > 0:
 		action = "file_edit"
 	}

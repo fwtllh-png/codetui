@@ -2,6 +2,7 @@ package engine
 
 import (
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/fwtllh-png/QCode/internal/adapter/provider"
@@ -9,14 +10,19 @@ import (
 	"github.com/fwtllh-png/QCode/internal/runtime/protocol"
 )
 
-func TestRecoveryHistoryReplacesSourceTurnByIdentity(t *testing.T) {
+func recoveryEnvelopeText(goal string, sourceTurnID string) string {
+	return goal + "\n\n<recovery_evidence>{\"v\":2}</recovery_evidence>" +
+		"\n<source_request turn=\"" + sourceTurnID + "\"/>"
+}
+
+func TestRecoveryHistoryKeepsContinueExchangesAndDedupesEnvelope(t *testing.T) {
 	engine := newEngine(t, &scriptedProvider{}, nil)
 	engine.history = []provider.Message{
 		messageWithText(provider.RoleUser, "earlier request", 1),
 		messageWithText(provider.RoleAssistant, "earlier answer", 1),
 		messageWithText(
 			provider.RoleUser,
-			"Continue the exact source Turn identified below.",
+			recoveryEnvelopeText("inspect the parser", "turn-origin"),
 			2,
 		),
 		toolCallMessage(2, "call-1", "file_read", `{"path":"a.go"}`),
@@ -29,16 +35,49 @@ func TestRecoveryHistoryReplacesSourceTurnByIdentity(t *testing.T) {
 		Action:       protocol.TurnRecoveryContinue,
 		SourceTurnID: "turn-source",
 	})
-	if len(history) != 2 ||
+	if len(history) != 5 ||
 		history[0].Text() != "earlier request" ||
-		history[1].Text() != "earlier answer" {
-		t.Fatalf("recovery base history = %+v", history)
+		history[1].Text() != "earlier answer" ||
+		history[2].Blocks[0].ToolCall.ID != "call-1" ||
+		history[3].Blocks[0].ToolResult.CallID != "call-1" ||
+		history[4].Text() != "unfinished" {
+		t.Fatalf("continue base history = %+v", history)
+	}
+	for _, message := range history {
+		if message.Text() == "inspect the parser" {
+			t.Fatalf("continue base history kept the source envelope: %+v", history)
+		}
 	}
 	if !agentcontext.ToolPairsClosed(history) {
-		t.Fatalf("recovery base history broke tool pairs: %+v", history)
+		t.Fatalf("continue base history broke tool pairs: %+v", history)
 	}
 	if len(engine.history) != 6 {
 		t.Fatalf("recovery projection mutated durable history: %+v", engine.history)
+	}
+}
+
+func TestRecoveryHistoryReplacesSourceTurnForRetry(t *testing.T) {
+	engine := newEngine(t, &scriptedProvider{}, nil)
+	engine.history = []provider.Message{
+		messageWithText(provider.RoleUser, "earlier request", 1),
+		messageWithText(provider.RoleAssistant, "earlier answer", 1),
+		messageWithText(provider.RoleUser, "retry me", 2),
+		toolCallMessage(2, "call-1", "file_read", `{"path":"a.go"}`),
+		toolResultMessage(2, "call-1", "package a"),
+	}
+	agentcontext.ReconcileHistoryTurns(&engine.historyTurns, engine.history, "turn-source", 2)
+
+	history := agentcontext.RecoveryBaseHistory(engine.history, engine.historyTurns, &protocol.TurnRecoveryContext{
+		Action:       protocol.TurnRecoveryRetry,
+		SourceTurnID: "turn-source",
+	})
+	if len(history) != 2 ||
+		history[0].Text() != "earlier request" ||
+		history[1].Text() != "earlier answer" {
+		t.Fatalf("retry base history = %+v", history)
+	}
+	if !agentcontext.ToolPairsClosed(history) {
+		t.Fatalf("retry base history broke tool pairs: %+v", history)
 	}
 }
 
@@ -47,7 +86,11 @@ func TestRepeatedRecoveryDoesNotAccumulateRecoveryTurns(t *testing.T) {
 	engine.history = []provider.Message{
 		messageWithText(provider.RoleUser, "earlier request", 1),
 		messageWithText(provider.RoleAssistant, "earlier answer", 1),
-		messageWithText(provider.RoleUser, "recovery envelope one", 2),
+		messageWithText(
+			provider.RoleUser,
+			recoveryEnvelopeText("inspect the parser", "turn-origin"),
+			2,
+		),
 		messageWithText(provider.RoleAssistant, "partial one", 2),
 	}
 	agentcontext.ReconcileHistoryTurns(&engine.historyTurns, engine.history, "recovery-1", 2)
@@ -58,7 +101,11 @@ func TestRepeatedRecoveryDoesNotAccumulateRecoveryTurns(t *testing.T) {
 	})
 	second = append(
 		second,
-		messageWithText(provider.RoleUser, "recovery envelope two", 3),
+		messageWithText(
+			provider.RoleUser,
+			recoveryEnvelopeText("inspect the parser", "recovery-1"),
+			3,
+		),
 		messageWithText(provider.RoleAssistant, "partial two", 3),
 	)
 	engine.history = cloneMessages(second)
@@ -68,10 +115,18 @@ func TestRepeatedRecoveryDoesNotAccumulateRecoveryTurns(t *testing.T) {
 		Action:       protocol.TurnRecoveryContinue,
 		SourceTurnID: "recovery-2",
 	})
-	if len(third) != 2 ||
+	if len(third) != 4 ||
 		third[0].Text() != "earlier request" ||
-		third[1].Text() != "earlier answer" {
-		t.Fatalf("third recovery accumulated prior envelopes: %+v", third)
+		third[1].Text() != "earlier answer" ||
+		third[2].Text() != "partial one" ||
+		third[3].Text() != "partial two" {
+		t.Fatalf("third recovery lost accumulated exchanges: %+v", third)
+	}
+	for _, message := range third {
+		if text := message.Text(); text != "" &&
+			strings.Contains(text, "<recovery_evidence>") {
+			t.Fatalf("third recovery accumulated prior envelopes: %+v", third)
+		}
 	}
 }
 
@@ -83,7 +138,11 @@ func TestRecoveryRunProjectsOnlyCanonicalCurrentEnvelope(t *testing.T) {
 	engine.history = []provider.Message{
 		messageWithText(provider.RoleUser, "earlier request", 1),
 		messageWithText(provider.RoleAssistant, "earlier answer", 1),
-		messageWithText(provider.RoleUser, "stale recovery envelope", 2),
+		messageWithText(
+			provider.RoleUser,
+			recoveryEnvelopeText("stale recovery goal", "turn-source"),
+			2,
+		),
 		messageWithText(provider.RoleAssistant, "stale partial output", 2),
 	}
 	agentcontext.ReconcileHistoryTurns(&engine.historyTurns, engine.history, "turn-source", 2)
@@ -114,12 +173,13 @@ func TestRecoveryRunProjectsOnlyCanonicalCurrentEnvelope(t *testing.T) {
 		}
 	}
 	for _, text := range texts {
-		if text == "stale recovery envelope" ||
-			text == "stale partial output" {
-			t.Fatalf("provider request retained stale recovery text: %q", texts)
+		if strings.Contains(text, "<recovery_evidence>") ||
+			text == "stale recovery goal" {
+			t.Fatalf("provider request retained stale recovery envelope: %q", texts)
 		}
 	}
 	if !slices.Contains(texts, "earlier request") ||
+		!slices.Contains(texts, "stale partial output") ||
 		!slices.Contains(texts, "canonical current recovery envelope") {
 		t.Fatalf("provider request texts = %q", texts)
 	}
@@ -128,7 +188,7 @@ func TestRecoveryRunProjectsOnlyCanonicalCurrentEnvelope(t *testing.T) {
 func TestHistoryCompactionReconcilesRecoveryBindings(t *testing.T) {
 	engine := newEngine(t, &scriptedProvider{}, nil)
 	engine.history = []provider.Message{
-		messageWithText(provider.RoleUser, "source", 2),
+		messageWithText(provider.RoleSystem, "source", 2),
 		messageWithText(provider.RoleAssistant, "partial", 2),
 	}
 	agentcontext.ReconcileHistoryTurns(&engine.historyTurns, engine.history, "turn-source", 2)

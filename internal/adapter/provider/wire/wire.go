@@ -29,9 +29,10 @@ type PreparedCall struct {
 	Projection   provider.ProjectionReceipt
 }
 type HTTPFailure struct {
-	Status int
-	Header http.Header
-	Body   string
+	ProviderID string
+	Status     int
+	Header     http.Header
+	Body       string
 }
 type Adapter interface {
 	ID() model.AdapterID

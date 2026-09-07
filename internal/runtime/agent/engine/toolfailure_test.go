@@ -758,8 +758,8 @@ func TestToolSelectionKeepsCoreAndBoundedRelevantDefinitions(t *testing.T) {
 	for _, name := range []string{
 		"search_text", "search_files", "search_definition", "search_references",
 		"file_read", "file_list", "file_write", "file_edit", "file_apply",
-		"shell_read", "exec_command", "write_stdin", "quality_test",
-		"quality_verify", "project_map", "special_deploy", "unrelated_fixture",
+		"shell_read", "exec_command", "write_stdin",
+		"project_map", "special_deploy", "unrelated_fixture",
 	} {
 		if err := registry.Register(catalogFixtureTool(name)); err != nil {
 			t.Fatal(err)
@@ -777,7 +777,7 @@ func TestToolSelectionKeepsCoreAndBoundedRelevantDefinitions(t *testing.T) {
 	}
 	for _, name := range []string{
 		"tool_search", "search_text", "file_read", "file_write",
-		"exec_command", "write_stdin", "quality_test", "quality_verify",
+		"exec_command", "write_stdin",
 		"special_deploy",
 	} {
 		if !advertised[name] {
@@ -997,7 +997,7 @@ func TestToolSelectionUsesProviderBudgetInsteadOfFixedRelevantCount(t *testing.T
 func TestCatalogReceiptUsesLastProviderToolDefinitions(t *testing.T) {
 	registry := tool.NewRegistry(nil, nil)
 	for _, name := range []string{
-		"turn_complete", "update_plan", "quality_test", "shell_read", "exec_command",
+		"turn_complete", "update_plan", "write_stdin", "shell_read", "exec_command",
 	} {
 		if err := registry.Register(catalogFixtureTool(name)); err != nil {
 			t.Fatal(err)
@@ -1011,7 +1011,7 @@ func TestCatalogReceiptUsesLastProviderToolDefinitions(t *testing.T) {
 	}
 	scope.spec.Catalog = snapshot
 	engine.recordSampledTools(scope, snapshot, []provider.ToolDefinition{
-		{Name: "turn_complete"}, {Name: "update_plan"}, {Name: "quality_test"},
+		{Name: "turn_complete"}, {Name: "update_plan"}, {Name: "write_stdin"},
 	})
 
 	receipt := engine.CatalogReceipt()

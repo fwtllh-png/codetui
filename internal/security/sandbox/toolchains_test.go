@@ -128,3 +128,44 @@ func TestPolicyDiscoversEveryInstalledToolchainEntry(t *testing.T) {
 		}
 	}
 }
+
+func TestGoToolchainFollowsSelectedExecutableNotRuntimeBuildRoot(t *testing.T) {
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	installation := filepath.Join(root, "go", "libexec")
+	bin := filepath.Join(root, "bin")
+	for _, directory := range []string{
+		filepath.Join(installation, "bin"), filepath.Join(installation, "src"),
+		filepath.Join(installation, "pkg", "tool"), bin,
+	} {
+		if err := os.MkdirAll(directory, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	executable := filepath.Join(installation, "bin", "go")
+	if err := os.WriteFile(executable, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(executable, filepath.Join(bin, "go")); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin)
+	t.Setenv("GOROOT", "")
+	exposure := discoverToolchains(filepath.Join(root, "workspace"), nil, nil)
+	canonical, err := filepath.EvalSymlinks(installation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(exposure.ReadRoots, canonical) ||
+		!slices.Contains(exposure.Environment, "GOROOT="+canonical) {
+		t.Fatalf("incomplete selected toolchain: %+v", exposure)
+	}
+	t.Setenv("GOROOT", root)
+	// Invalid parent/home exposure is still rejected by the normal policy.
+	exposure = discoverToolchains(filepath.Join(root, "workspace"), nil, nil)
+	if slices.Contains(exposure.ReadRoots, root) {
+		t.Fatal("workspace parent was exposed as a toolchain")
+	}
+}

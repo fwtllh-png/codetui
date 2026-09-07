@@ -181,8 +181,69 @@ func ensureWorkspaceBinding(
 		}
 		return fmt.Errorf("decode workspace journal binding: %w", err)
 	}
-	if actual != expected {
+	if !bindingIdentityMatches(actual, expected) {
 		return errors.New("workspace journal binding does not match the current workspace")
+	}
+	if actual.Device != expected.Device || actual.FileID != expected.FileID {
+		// The volume's device number drifted while the directory identity
+		// held; adopt the current number so the next start compares against
+		// the refreshed binding instead of failing on the drift again.
+		if err := refreshWorkspaceBinding(stateRoot, expected); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// bindingIdentityMatches reports whether a stored binding still identifies
+// the same workspace directory. Volume device numbers are not stable across
+// reboots (macOS reassigns st_dev per mount set), so a drifted device with
+// an unchanged inode is the same directory rather than a replacement. A
+// replaced directory keeps failing: a fresh directory on any volume is
+// assigned a different inode.
+func bindingIdentityMatches(actual, expected workspaceBinding) bool {
+	if actual.Version != expected.Version ||
+		actual.WorkspaceID != expected.WorkspaceID ||
+		actual.CanonicalRoot != expected.CanonicalRoot {
+		return false
+	}
+	switch {
+	case expected.Inode != 0:
+		return actual.Inode == expected.Inode
+	case expected.FileID != "":
+		return actual.FileID == expected.FileID
+	default:
+		return actual.Device == expected.Device
+	}
+}
+
+func refreshWorkspaceBinding(
+	stateRoot *os.Root,
+	expected workspaceBinding,
+) error {
+	encoded, err := json.Marshal(expected)
+	if err != nil {
+		return err
+	}
+	staged := bindingName + ".staging"
+	file, err := stateRoot.OpenFile(
+		staged,
+		os.O_WRONLY|os.O_CREATE|os.O_TRUNC,
+		0o600,
+	)
+	if err != nil {
+		return fmt.Errorf("stage workspace journal binding: %w", err)
+	}
+	_, writeErr := file.Write(append(encoded, '\n'))
+	syncErr := file.Sync()
+	closeErr := file.Close()
+	if err := errors.Join(writeErr, syncErr, closeErr); err != nil {
+		_ = stateRoot.Remove(staged)
+		return fmt.Errorf("persist workspace journal binding: %w", err)
+	}
+	if err := stateRoot.Rename(staged, bindingName); err != nil {
+		_ = stateRoot.Remove(staged)
+		return fmt.Errorf("commit workspace journal binding: %w", err)
 	}
 	return nil
 }

@@ -116,6 +116,19 @@ func (e *Engine) runToolsWithCache(
 		},
 		Execute: func(callCtx context.Context, call provider.ToolCall) (tool.Result, error) {
 			binding := tool.BindingForCall(call)
+			if e.options.VerificationOnly && call.Name == "exec_command" {
+				var declaration struct {
+					Verification string `json:"verification"`
+				}
+				if json.Unmarshal([]byte(call.Arguments), &declaration) != nil ||
+					declaration.Verification == "" {
+					return tool.Result{
+						Content:  "verifier role requires exec_command with verification and covered_paths",
+						IsError:  true,
+						Metadata: map[string]any{"error_category": "child_authority_denied"},
+					}, nil
+				}
+			}
 			finishOnly := tool.FinishOnlyEnabled(toolCtx)
 			if finishOnly {
 				canonical, descriptor, _, resolveErr :=
@@ -125,7 +138,7 @@ func (e *Engine) runToolsWithCache(
 					return tool.Result{
 						Content: "read-only exploration is disabled after repeated " +
 							"model samples without structured progress; apply a " +
-							"workspace change, run a quality tool, update the " +
+							"workspace change, run a verification command, update the " +
 							"plan, or call turn_complete",
 						IsError: true,
 						Metadata: map[string]any{
@@ -181,30 +194,34 @@ func (e *Engine) runToolsWithCache(
 			batchMutated bool,
 			mutationRevision uint64,
 		) {
+			if call.Name == "file_read" && result != nil && !result.IsError {
+				if reason := e.takeReadInvalidation(call.ID); reason != "" {
+					if result.Metadata == nil {
+						result.Metadata = make(map[string]any)
+					}
+					result.Metadata["invalidated_read"] = reason
+				}
+			}
 			e.bindVerificationEvidence(
 				call,
 				result,
 				batchMutated,
 				mutationRevision,
 			)
-			if !result.IsError {
-				for _, change := range turnkernel.ObservedFileChanges(*result) {
-					scope.state.diff.Record(turnkernel.TurnDiffEntry{
-						Path: change.Path, Tool: call.Name, Kind: change.Kind,
-						Added: change.Added, Removed: change.Removed,
-					})
-					e.contextAuthority().ObservePath(
-						e.options.Workspace,
-						agentcontext.SourceEdited,
-						e.turn,
-						change.Path,
-					)
-					e.contextAuthority().ObserveChange(
-						e.options.Workspace,
-						change,
-						e.turn,
-					)
+			for _, change := range turnkernel.ObservedFileChanges(*result) {
+				if relative, ok := agentcontext.WorkspaceRelative(e.options.Workspace, change.Path); ok {
+					change.Path = relative
 				}
+				scope.state.diff.Record(turnkernel.TurnDiffEntry{
+					Path: change.Path, Tool: call.Name, Kind: change.Kind,
+					Added: change.Added, Removed: change.Removed,
+				})
+				e.contextAuthority().ObservePath(
+					e.options.Workspace, agentcontext.SourceEdited, e.turn, change.Path,
+				)
+				e.contextAuthority().ObserveChange(e.options.Workspace, change, e.turn)
+			}
+			if !result.IsError {
 				e.contextAuthority().ObservePath(
 					e.options.Workspace,
 					agentcontext.SourceRead,

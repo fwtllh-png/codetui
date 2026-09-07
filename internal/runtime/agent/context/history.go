@@ -9,6 +9,15 @@ import (
 	"github.com/fwtllh-png/QCode/internal/runtime/protocol"
 )
 
+const recoveryEvidenceMarker = "<recovery_evidence>"
+const recoverySourceRequestMarker = "<source_request turn="
+
+// RecoveryBaseHistory projects the history a recovery Turn starts from.
+// Retry re-executes the source Turn from its original request, so the whole
+// source conversation is removed. Continue carries the source goal forward
+// inside the new Turn's envelope: only the stale envelope wrappers are
+// deduplicated while the source Turn's closed exchanges stay model-visible,
+// because knowing a file was read cannot replace the read itself.
 func RecoveryBaseHistory(
 	history []provider.Message,
 	historyTurns map[string]uint64,
@@ -22,13 +31,27 @@ func RecoveryBaseHistory(
 	if !ok || sourceTurn == 0 {
 		return result
 	}
+	continueRecovery := recovery.Action == protocol.TurnRecoveryContinue
 	filtered := result[:0]
 	for _, message := range result {
-		if message.Turn != sourceTurn {
-			filtered = append(filtered, message)
+		if message.Turn == sourceTurn {
+			if continueRecovery && !isRecoveryEnvelopeMessage(message) {
+				filtered = append(filtered, message)
+			}
+			continue
 		}
+		filtered = append(filtered, message)
 	}
 	return filtered
+}
+
+func isRecoveryEnvelopeMessage(message provider.Message) bool {
+	if message.Role != provider.RoleUser {
+		return false
+	}
+	text := message.Text()
+	return strings.Contains(text, recoveryEvidenceMarker) ||
+		strings.Contains(text, recoverySourceRequestMarker)
 }
 
 func ReconcileHistoryTurns(

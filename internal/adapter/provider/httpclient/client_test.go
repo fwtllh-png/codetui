@@ -865,9 +865,8 @@ func TestClientDerivesSharedCooldownFromRateLimitedRequest(t *testing.T) {
 	var failure *provider.Failure
 	if !errors.As(err, &problem) ||
 		!errors.As(err, &failure) ||
-		problem.RateLimit == nil ||
-		problem.RateLimit.RetryAfterMS == 0 ||
-		failure.RetryAfterMS != problem.RateLimit.RetryAfterMS {
+		problem.RateLimit != nil ||
+		failure.RetryAfterMS != 0 {
 		t.Fatalf("rate limit error = %#v, failure = %#v", problem, failure)
 	}
 

@@ -196,6 +196,9 @@ func (s *Scope) Run(ctx context.Context) (result Result, resultErr error) {
 			len(draftChanges),
 		)
 		for _, change := range draftChanges {
+			if relative, ok := agentcontext.WorkspaceRelative(e.options.Workspace, change.Path); ok {
+				change.Path = relative
+			}
 			kernelDraftChanges = append(
 				kernelDraftChanges,
 				turnkernel.ObservedChange{
@@ -338,8 +341,12 @@ func (s *Scope) Run(ctx context.Context) (result Result, resultErr error) {
 		}
 	}
 	transaction := agentcontext.RecoveryBaseHistory(e.history, e.historyTurns, spec.Request.Recovery)
+	continuation, continuationUsable, continuationErr := e.loadTurnContinuation(ctx, kernel, spec)
 	terminal = newTurnEmitter(e.turn, emit)
 	terminal.setCommitted(e.applySessionDelta)
+	if continuationErr != nil {
+		terminal.addSecondary("turn_continuation", continuationErr)
+	}
 	terminal.setCancelReason(func() string {
 		if reason := kernel.CancellationReason(); reason != "" {
 			return reason
@@ -452,8 +459,18 @@ func (s *Scope) Run(ctx context.Context) (result Result, resultErr error) {
 		if reason == "" {
 			return false, nil
 		}
+		// The terminal commit must carry the closed conversation, so the
+		// settlement has to run before the kernel finalizes: staging the
+		// SessionDelta here is what keeps published-but-unprojected tool
+		// results recoverable instead of vanishing with the canceled batch.
+		snapshot, settleErr := e.finalizeTerminalContext(
+			transaction, false, true, nil, provider.Usage{}, 0, send,
+		)
 		contextFinalized = true
-		terminal.setContextBudget(ContextBudgetSnapshot{})
+		terminal.setContextBudget(snapshot)
+		if settleErr != nil {
+			terminal.addSecondary("terminal_context", settleErr)
+		}
 		if err := finalizeKernel(
 			turnkernel.TerminalRequested{CancelReason: reason},
 			nil,
@@ -552,17 +569,108 @@ func (s *Scope) Run(ctx context.Context) (result Result, resultErr error) {
 	}); err != nil {
 		return result, err
 	}
-	user := provider.TextMessage(provider.RoleUser, prompt)
-	for index := range attachments {
-		attachment := attachments[index]
-		user.Blocks = append(user.Blocks, provider.ContentBlock{
-			Type: provider.ContentImage, Attachment: &attachment,
-		})
+	if continuationUsable {
+		// A restored Turn's accepted conversation already contains its
+		// opening user request; re-appending the submitted prompt would
+		// duplicate the goal the continuation carries.
+		transaction = append(transaction, continuation.Messages...)
+	} else {
+		user := provider.TextMessage(provider.RoleUser, prompt)
+		for index := range attachments {
+			attachment := attachments[index]
+			user.Blocks = append(user.Blocks, provider.ContentBlock{
+				Type: provider.ContentImage, Attachment: &attachment,
+			})
+		}
+		user.Turn = e.turn
+		transaction = append(transaction, user)
 	}
-	user.Turn = e.turn
-	transaction = append(transaction, user)
 	executed := make(map[string]tool.Result)
 	cache := &toolResultCache{}
+	// salvageCompletedResults projects the durably closed calls of an
+	// interrupted batch into the transaction. Calls without a kernel-closed
+	// result stay dangling and are dropped by pair normalization during
+	// settlement, so the model never sees an unclosed tool pair but the
+	// completed evidence survives the cancellation.
+	salvageCompletedResults := func(calls []provider.ToolCall) {
+		if kernel.CancellationReason() == "" {
+			return
+		}
+		completedCalls := make([]provider.ToolCall, 0, len(calls))
+		completedResults := make([]tool.Result, 0, len(calls))
+		for _, call := range calls {
+			if result, ok := executed[call.ID]; ok {
+				completedCalls = append(completedCalls, call)
+				completedResults = append(completedResults, result)
+			}
+		}
+		if len(completedCalls) == 0 {
+			return
+		}
+		messages, err := tool.ProjectModelResults(
+			completedCalls,
+			completedResults,
+			e.turn,
+		)
+		if err != nil {
+			return
+		}
+		transaction = append(transaction, messages...)
+	}
+	// persistContinuation stores the accepted in-turn conversation at
+	// semantic boundaries. The content is written before the kernel commits
+	// the cursor, so a committed continuation fact always resolves and a
+	// crash between the two leaves only an unreferenced blob for storage
+	// governance to collect.
+	persistContinuation := func(sampleID string, step int) {
+		blobs := e.options.TurnContinuations
+		if blobs == nil || !e.continuationEnvironmentComplete(spec) {
+			return
+		}
+		messages, _, err := agentcontext.NormalizePairs(
+			currentTurnMessages(transaction, e.turn),
+		)
+		if err != nil {
+			terminal.addSecondary("turn_continuation", err)
+			return
+		}
+		// Pair normalization projects through the ledger partition, which
+		// drops turn attribution; restamp so restore-side filtering by the
+		// current turn keeps working.
+		for index := range messages {
+			messages[index].Turn = e.turn
+		}
+		if len(messages) == 0 {
+			return
+		}
+		record := agentcontext.TurnContinuation{
+			Version:           agentcontext.ContinuationVersion,
+			TurnID:            turnID,
+			Sequence:          kernel.NextContinuationSequence(),
+			TurnNumber:        e.turn,
+			SessionRevision:   e.sessionRevision,
+			StateEpoch:        max(uint64(1), e.stateEpoch),
+			SampleID:          sampleID,
+			Step:              step,
+			WorkspaceIdentity: e.options.WorkspaceIdentity,
+			ProfileRevision:   spec.Identity.ProfileRevision,
+			Provider:          spec.Provider,
+			Model:             spec.Model,
+			Messages:          messages,
+		}
+		ref, err := agentcontext.StoreTurnContinuation(ctx, blobs, record)
+		if err != nil {
+			terminal.addSecondary("turn_continuation", err)
+			return
+		}
+		if err := kernel.RecordContinuation(turnkernel.ContinuationCursor{
+			Sequence: record.Sequence,
+			Handle:   ref.Handle,
+			Digest:   ref.Digest,
+		}); err != nil {
+			terminal.addSecondary("turn_continuation", err)
+		}
+	}
 	progress := kernel.ProgressObservation()
 	if recoveredCalls := kernel.PendingToolCalls(); len(recoveredCalls) != 0 {
 		blocks := make([]provider.ContentBlock, 0, len(recoveredCalls))
@@ -590,6 +698,7 @@ func (s *Scope) Run(ctx context.Context) (result Result, resultErr error) {
 			kernel,
 			send,
 		)
+		salvageCompletedResults(recoveredCalls)
 		if canceled, cancelErr := finishAcceptedCancellation(); canceled {
 			return result, cancelErr
 		}
@@ -605,6 +714,8 @@ func (s *Scope) Run(ctx context.Context) (result Result, resultErr error) {
 			return result, err
 		}
 		transaction = append(transaction, resultMessages...)
+		e.recordReadResults(recoveredCalls, results)
+		persistContinuation("", 0)
 	}
 	// Tool-model usage is accounted separately from this route.
 	var sampled provider.Usage
@@ -724,7 +835,7 @@ func (s *Scope) Run(ctx context.Context) (result Result, resultErr error) {
 		result.CostUSD = cost
 		terminal.setPrimary(blocked)
 		snapshot, err := e.finalizeTerminalContext(
-			transaction, true, false, nil, result.Usage, cost, send,
+			transaction, false, false, blocked, result.Usage, cost, send,
 		)
 		contextFinalized = true
 		terminal.setContextBudget(snapshot)
@@ -1065,6 +1176,7 @@ func (s *Scope) Run(ctx context.Context) (result Result, resultErr error) {
 						),
 					)
 				}
+				persistContinuation(sampleID, step)
 				continue
 			}
 			transaction = append(
@@ -1073,6 +1185,7 @@ func (s *Scope) Run(ctx context.Context) (result Result, resultErr error) {
 					spec.Route, blocks, e.turn, modelReplay,
 				),
 			)
+			persistContinuation(sampleID, step)
 			completed, err := advanceTurn()
 			if err != nil {
 				return result, err
@@ -1126,6 +1239,7 @@ func (s *Scope) Run(ctx context.Context) (result Result, resultErr error) {
 				return result, errors.Join(err, usageErr)
 			}
 		}
+		salvageCompletedResults(calls)
 		if canceled, cancelErr := finishAcceptedCancellation(); canceled {
 			return result, cancelErr
 		}
@@ -1141,6 +1255,8 @@ func (s *Scope) Run(ctx context.Context) (result Result, resultErr error) {
 			return result, err
 		}
 		transaction = append(transaction, resultMessages...)
+		e.recordReadResults(calls, results)
+		persistContinuation(sampleID, step)
 		if completion := kernel.Completion(); completion != nil &&
 			completion.Accepted {
 			completed, err := advanceTurn()

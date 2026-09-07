@@ -2,6 +2,7 @@ package workspacejournal
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -572,6 +573,68 @@ func TestOpenRejectsReplacedWorkspaceRoot(t *testing.T) {
 	if _, err := Open(root, directory, testWorkspaceID); err == nil ||
 		!strings.Contains(err.Error(), "does not match") {
 		t.Fatalf("Open() root replacement error = %v", err)
+	}
+}
+
+// A volume device number is not stable across reboots (macOS reassigns
+// st_dev per mount set), while the workspace directory keeps its inode. The
+// journal must open against the drifted device and refresh the stored
+// binding rather than refuse to start.
+func TestOpenToleratesDeviceDriftAcrossRestarts(t *testing.T) {
+	root := t.TempDir()
+	directory := filepath.Join(t.TempDir(), "journal")
+	manager, err := Open(root, directory, testWorkspaceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+
+	bindingPath := filepath.Join(directory, bindingName)
+	raw, err := os.ReadFile(bindingPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var drifted workspaceBinding
+	if err := json.Unmarshal(raw, &drifted); err != nil {
+		t.Fatal(err)
+	}
+	drifted.Device += 4
+	drifted.FileID = "drifted-file-id"
+	encoded, err := json.Marshal(drifted)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(bindingPath, append(encoded, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := Open(root, directory, testWorkspaceID)
+	if err != nil {
+		t.Fatalf("Open() after device drift = %v", err)
+	}
+	if err := reopened.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+
+	refreshed, err := os.ReadFile(bindingPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var current workspaceBinding
+	if err := json.Unmarshal(refreshed, &current); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	currentIdentity := identity(info)
+	if current.Device != currentIdentity.Device ||
+		current.Inode != currentIdentity.Inode ||
+		current.FileID != currentIdentity.FileID {
+		t.Fatalf("refreshed binding = %+v, want identity %+v", current, currentIdentity)
 	}
 }
 

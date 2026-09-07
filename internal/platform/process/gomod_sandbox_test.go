@@ -19,6 +19,11 @@ func TestGoModuleCacheWritableInSandbox(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte("module example.com/t\n\ngo 1.22\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(root, "probe_test.go"), []byte(
+		"package probe\nimport (\"testing\"; \"strings\")\nfunc TestProbe(t *testing.T) { if strings.TrimSpace(\" ok \") != \"ok\" { t.Fatal(\"probe\") } }\n",
+	), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	helper, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
@@ -44,11 +49,11 @@ func TestGoModuleCacheWritableInSandbox(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = pinned.Close() })
 
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	result, err := Run(ctx, Options{
 		Dir: ws.Root(), DirFile: pinned,
-		Command: `go env GOMODCACHE GOCACHE GOTMPDIR HOME && go list -m`,
+		Command: `go env GOMODCACHE GOCACHE GOTMPDIR HOME && go list -m && go test ./... && go vet ./...`,
 		Sandbox: backend, RequireSandbox: true,
 	})
 	if err != nil {

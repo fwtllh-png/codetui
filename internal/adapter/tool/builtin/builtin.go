@@ -13,7 +13,6 @@ import (
 	gittool "github.com/fwtllh-png/QCode/internal/adapter/tool/git"
 	handletool "github.com/fwtllh-png/QCode/internal/adapter/tool/handle"
 	lsptool "github.com/fwtllh-png/QCode/internal/adapter/tool/lsp"
-	qualitytool "github.com/fwtllh-png/QCode/internal/adapter/tool/quality"
 	repohosttool "github.com/fwtllh-png/QCode/internal/adapter/tool/repohost"
 	searchtool "github.com/fwtllh-png/QCode/internal/adapter/tool/search"
 	shelltool "github.com/fwtllh-png/QCode/internal/adapter/tool/shell"
@@ -60,7 +59,7 @@ func NewWithIndexAndRuntime(
 	store contentstore.Store,
 	manager *process.SessionManager,
 	index *repoindex.Index,
-	runtime *ProcessRuntime,
+	workspaceRuntime *workspacebroker.Runtime,
 	webOpts ...webtool.Options,
 ) (*tool.Registry, *handletool.Store, error) {
 	if backend == nil {
@@ -143,10 +142,6 @@ func NewWithIndexAndRuntime(
 	); err != nil {
 		return nil, nil, err
 	}
-	var workspaceRuntime *workspacebroker.Runtime
-	if runtime != nil {
-		workspaceRuntime = runtime.workspace
-	}
 	if err := gittool.RegisterWithBackendAndRuntime(
 		registry, root, backend, workspaceRuntime,
 	); err != nil {
@@ -171,34 +166,24 @@ func NewWithIndexAndRuntime(
 	); err != nil {
 		return nil, nil, err
 	}
-	var qualityRuntime qualitytool.RuntimeDependencies
-	if runtime != nil {
-		qualityRuntime = runtime.quality
-	}
-	if err := qualitytool.RegisterWithBackendAndRuntime(
-		registry, root, backend, qualityRuntime,
-	); err != nil {
-		return nil, nil, err
-	}
 	if err := toolsearch.Register(registry); err != nil {
 		return nil, nil, err
 	}
 	return registry, handles, nil
 }
 
-func NewWithRuntimeState(
+func NewWithAuthority(
 	root string,
 	backend sandbox.Backend,
 	store contentstore.Store,
 	manager *process.SessionManager,
 	index *repoindex.Index,
-	stateRoot, workspaceID string,
 	leaseAuthority *authority.LeaseAuthority,
 	leaseTTL time.Duration,
 	webOpts ...webtool.Options,
 ) (*tool.Registry, *handletool.Store, error) {
-	runtime, err := NewProcessRuntime(
-		root, stateRoot, workspaceID, 1, leaseAuthority, leaseTTL,
+	runtime, err := NewWorkspaceBroker(
+		root, leaseAuthority, leaseTTL,
 	)
 	if err != nil {
 		return nil, nil, err

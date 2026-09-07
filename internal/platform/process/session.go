@@ -75,11 +75,12 @@ type SessionOptions struct {
 }
 
 type SessionRead struct {
-	Data     string
-	Cursor   uint64
-	Running  bool
-	ExitCode int
-	TTY      bool
+	Data       string
+	Cursor     uint64
+	Running    bool
+	ExitCode   int
+	TTY        bool
+	Terminated bool
 	// Archived is true when the data came from the durable log rather than the
 	// live buffer, which tells a caller its cursor had fallen behind.
 	Archived bool
@@ -117,6 +118,7 @@ type Session struct {
 	baseCursor uint64
 	running    bool
 	exitCode   int
+	terminated bool
 	waitDone   chan struct{}
 	readDone   chan struct{}
 	notify     chan struct{}
@@ -335,6 +337,7 @@ func (m *SessionManager) Read(id, threadID string, cursor uint64) (SessionRead, 
 	end := session.baseCursor + uint64(len(session.output))
 	base := session.baseCursor
 	running, exitCode, tty := session.running, session.exitCode, session.tty
+	terminated := session.terminated
 	var live string
 	if cursor >= base && cursor <= end {
 		live = string(session.output[cursor-base:])
@@ -346,7 +349,7 @@ func (m *SessionManager) Read(id, threadID string, cursor uint64) (SessionRead, 
 	if cursor >= base {
 		return SessionRead{
 			Data: live, Cursor: end, Running: running, ExitCode: exitCode,
-			TTY: tty,
+			TTY: tty, Terminated: terminated,
 		}, nil
 	}
 	// The buffer has moved past this cursor. Without an archive the bytes are gone
@@ -368,7 +371,7 @@ func (m *SessionManager) Read(id, threadID string, cursor uint64) (SessionRead, 
 	}
 	return SessionRead{
 		Data: string(data), Cursor: next, Running: running, ExitCode: exitCode,
-		TTY: tty, Archived: true, Pending: pending,
+		TTY: tty, Terminated: terminated, Archived: true, Pending: pending,
 	}, nil
 }
 
@@ -501,6 +504,9 @@ func (m *SessionManager) Signal(id, threadID string, signal syscall.Signal) erro
 	if !running {
 		return errors.New("terminal session is not running")
 	}
+	session.mu.Lock()
+	session.terminated = true
+	session.mu.Unlock()
 	return signalProcessGroup(session.command.Process, signal)
 }
 
@@ -717,6 +723,9 @@ func (s *Session) close() {
 		running := s.running
 		s.mu.RUnlock()
 		if running {
+			s.mu.Lock()
+			s.terminated = true
+			s.mu.Unlock()
 			_ = terminateProcessGroup(s.command.Process)
 		}
 		_ = s.input.Close()

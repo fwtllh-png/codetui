@@ -228,14 +228,14 @@ func TestProgressSignatureOnlyRenewsForMonotonicPlanProgress(t *testing.T) {
 	}
 }
 
-func TestFinishOnlyAllowsMutationAndQualityTools(t *testing.T) {
+func TestFinishOnlyAllowsMutationAndVerificationCommands(t *testing.T) {
 	for _, test := range []struct {
 		name       string
 		capability tool.Capability
 		want       bool
 	}{
 		{name: "file_apply", capability: tool.CapabilityWrite, want: true},
-		{name: "quality_test", capability: tool.CapabilityRead, want: true},
+		{name: "exec_command", capability: tool.CapabilityRead, want: true},
 		{name: "file_read", capability: tool.CapabilityRead, want: true},
 		{name: "exec_command", capability: tool.CapabilityProcess, want: true},
 		{name: "write_stdin", capability: tool.CapabilityProcess, want: true},
@@ -433,7 +433,7 @@ func TestAcceptedCompletionPublishesSummaryWithoutFinalAnswerSampleAtLimit(
 	for index := range 4 {
 		streams = append(streams, toolCallStream(
 			fmt.Sprintf("quality-%d", index),
-			"quality_verify",
+			"exec_command",
 			`{"covered_paths":["a.go"]}`,
 		))
 	}

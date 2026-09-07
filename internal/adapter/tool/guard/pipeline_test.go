@@ -105,7 +105,7 @@ func TestApprovalWaitHoldsNeitherAdmissionNorClaims(t *testing.T) {
 }
 
 func TestHostProcessApprovalIsFreshOnce(t *testing.T) {
-	descriptor := readDescriptor("quality_process_smoke")
+	descriptor := readDescriptor("fixture_host_process")
 	descriptor.Capability = tool.CapabilityProcess
 	descriptor.AccessMode = tool.AccessWrite
 	binding := tool.TrustedBindingFromDescriptor(descriptor)
@@ -138,7 +138,7 @@ func TestHostProcessApprovalIsFreshOnce(t *testing.T) {
 		_, executeErr := guard.Execute(
 			context.Background(),
 			"process-smoke",
-			"quality_process_smoke",
+			"fixture_host_process",
 			json.RawMessage(`{}`),
 		)
 		done <- executeErr

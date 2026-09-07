@@ -16,10 +16,9 @@ const (
 		"request_user_input,update_plan,submit_plan,turn_complete,"
 	readToolSet = ",search_text,search_files,search_definition," +
 		"search_references,file_read,file_list,file_write,file_edit," +
-		"file_apply,shell_read,exec_command,write_stdin,quality_test," +
-		"quality_verify,quality_process_smoke,project_map," +
+		"file_apply,shell_read,exec_command,write_stdin,project_map," +
 		"git_status,git_diff,git_log,git_add,git_commit,git_push,"
-	writeToolSet = ",search_related_tests,quality_diagnostics,"
+	writeToolSet = ",search_related_tests,"
 )
 
 type ProjectionRequest struct {

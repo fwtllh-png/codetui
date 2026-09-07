@@ -104,17 +104,28 @@ Tool Catalog 的 `discovery_terms` 保存不授予权限的多语言检索词。
 format/code-action/rename 只返回结构化 edits，不直接修改文件，应用 edits 仍通过受
 Journal 保护的文件工具完成。
 
-`quality_verify` 依据仓库 Manifest 自动发现 Go、Rust、Node、Python、CMake、Bazel、
-Maven 和 Gradle 验证入口。CMake 配置与构建目录位于沙箱私有 `$TMPDIR`，不会向
-Workspace 写入生成文件。`format_code` 只格式化显式路径且进入 before-image Journal；
+测试、构建和静态检查统一使用 `exec_command`，不再提供独立 quality 工具，也不默认
+执行 Go 或其他语言的校验。需要记录验证证据时，声明 `verification`（`test`、`build`、
+`lint` 或 `check`）和 Workspace 相对路径 `covered_paths`。例如：
+
+```json
+{"command":"npm test","verification":"test","covered_paths":["src/parser.ts"]}
+```
+
+验证命令保持 Workspace 只读，构建产物放在 `$TMPDIR`；不能同时声明 `write_paths`。
+声明验证的命令使用 POSIX `set -e`，组合检查仍应使用 `&&`，不要用管道截断输出来掩盖
+退出码。运行中只记录待结算状态，最终退出由 `exec_command` 或 `write_stdin` 返回；
+被终止、超时或输入变更的执行不能记录为验证通过。验证只证明实际命令对声明输入的
+执行结果，不自动证明测试充分性。
+
+`format_code` 只格式化显式路径且进入 before-image Journal；
 `debug_run` 使用 LLDB 的固定批处理参数，Workspace 保持只读；`dependency_resolve`
 以禁用脚本、Workspace 只读的方式解析依赖，并要求显式声明网络目标。
 
 安装 Chromium/Chrome 后，`web_run` 使用隔离临时 Profile 和 CDP 提供真实
 navigate、DOM snapshot、click 与 fill；`QCODE_BROWSER_BINARY` 可覆盖自动探测。
 本地开发地址必须显式传入 `allow_loopback`，不要把 `localhost` 或端口 `0` 写进
-`network_targets`。`quality_process_smoke` 只表示宿主进程活过声明时长，不能代替
-`quality_test` / `quality_verify`。`exec_command` 第一次只等到 `yield_time_ms`；
+`network_targets`。进程启动成功或存活不等于测试通过。`exec_command` 第一次只等到 `yield_time_ms`；
 进程还在跑时会返回 `session_id`，用 `write_stdin` 继续收输出或关闭，并可用
 `timeout_ms` 杀掉进程组。`http_request` 支持结构化
 GET/POST/PUT/PATCH/DELETE/HEAD、响应状态断言和有界 Body；它拒绝

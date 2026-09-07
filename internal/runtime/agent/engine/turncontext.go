@@ -147,12 +147,11 @@ func SnapshotTurnSpec(
 		request.Intent == protocol.TurnIntentPlan
 	kernelPolicy.StructuredTerminalRequired =
 		request.Intent == protocol.TurnIntentPlan
-	kernelPolicy.VerificationRequired = options.Verify.Enabled() ||
-		request.Intent == protocol.TurnIntentWorkspaceChange ||
-		options.RequireCompletionDeclaration
-	kernelPolicy.VerificationMustPass =
-		request.Intent == protocol.TurnIntentWorkspaceChange ||
-			options.RequireCompletionDeclaration
+	kernelPolicy.VerificationRequired = options.Verify.Enabled()
+	kernelPolicy.VerificationMustPass = options.Verify.Enabled() &&
+		options.Verify.Mode == VerifyModeHard &&
+		options.Verify.OnFailure != VerifyOnFailureRevert &&
+		request.Intent == protocol.TurnIntentWorkspaceChange
 	kernelPolicy.VerificationMode = options.Verify.Mode
 	kernelPolicy.VerificationOnFailure = options.Verify.OnFailure
 	kernelPolicy.VerificationRepairLimit =

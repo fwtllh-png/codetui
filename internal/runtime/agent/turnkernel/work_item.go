@@ -24,10 +24,18 @@ type WorkItem struct {
 	RequiredAction string                  `json:"required_action,omitempty"`
 }
 
+// WorkItemRead is the durable read record of one path: where the read
+// window sits, which content version it saw, where the spilled result lives,
+// and which call produced it. Window/ContentDigest legacy encodings stay
+// authoritative for records persisted before the structured fields existed.
 type WorkItemRead struct {
 	Window        string `json:"window,omitempty"`
 	ContentDigest string `json:"content_digest,omitempty"`
 	Turn          uint64 `json:"turn,omitempty"`
+	StartLine     int    `json:"start_line,omitempty"`
+	EndLine       int    `json:"end_line,omitempty"`
+	ResultHandle  string `json:"result_handle,omitempty"`
+	CallID        string `json:"call_id,omitempty"`
 }
 
 type WorkItemEdit struct {
@@ -46,6 +54,10 @@ type WorkItemOpen struct {
 type WorkItemObservation struct {
 	ReadPath      string   `json:"read_path,omitempty"`
 	ReadWindow    string   `json:"read_window,omitempty"`
+	ReadStart     int      `json:"read_start,omitempty"`
+	ReadEnd       int      `json:"read_end,omitempty"`
+	ResultHandle  string   `json:"result_handle,omitempty"`
+	CallID        string   `json:"call_id,omitempty"`
 	ContentDigest string   `json:"content_digest,omitempty"`
 	OpenSession   string   `json:"open_session,omitempty"`
 	CloseSession  string   `json:"close_session,omitempty"`
@@ -97,7 +109,7 @@ func DeriveRequiredAction(state State) string {
 		state.Verification.Status != VerificationPassed &&
 		state.Verification.Action != VerificationActionReported &&
 		state.Verification.Action != VerificationActionReverted:
-		return "quality_test"
+		return "exec_command"
 	case len(item.KnownReads) > 0 && len(item.KnownEdits) == 0:
 		return "file_edit"
 	case state.Completion != nil && state.Completion.Accepted:
@@ -228,6 +240,14 @@ func applyWorkItemObservation(
 		if observation.ContentDigest != "" {
 			read.ContentDigest = observation.ContentDigest
 		}
+		read.StartLine = observation.ReadStart
+		read.EndLine = observation.ReadEnd
+		if handle := strings.TrimSpace(observation.ResultHandle); handle != "" {
+			read.ResultHandle = handle
+		}
+		if callID := strings.TrimSpace(observation.CallID); callID != "" {
+			read.CallID = callID
+		}
 		item.KnownReads[path] = read
 	}
 	for _, change := range changes {
@@ -280,8 +300,12 @@ func ObserveWorkItemResult(
 		if start > 0 {
 			observation.ReadWindow = strconv.Itoa(start)
 		}
+		observation.ReadStart = start
 	}
 	if result.Outcome != nil && result.Outcome.Facts != nil {
+		observation.ResultHandle = strings.TrimSpace(
+			result.Outcome.Facts.ResultHandle,
+		)
 		if read := result.Outcome.Facts.WorkspaceRead; read != nil {
 			if observation.ReadPath == "" {
 				observation.ReadPath = strings.TrimSpace(read.Path)
@@ -297,15 +321,28 @@ func ObserveWorkItemResult(
 			}
 		}
 	}
-	if call.Name == "file_read" && observation.ReadPath == "" {
-		path, start, ok := ParseFileReadWindow(call.Arguments)
-		if ok {
-			observation.ReadPath = path
-			if start > 0 {
-				observation.ReadWindow = strconv.Itoa(start)
+	if call.Name == "file_read" {
+		// The file tool reports how much of the window the read returned; a
+		// window that stopped short of the end of file is bounded, anything
+		// else reaches EOF.
+		returned, _ := result.Metadata["returned_lines"].(int)
+		if more, _ := result.Metadata["has_more"].(bool); more && returned > 0 {
+			observation.ReadEnd = observation.ReadStart + returned
+		} else {
+			observation.ReadEnd = 0
+		}
+		if observation.ReadPath == "" {
+			path, start, ok := ParseFileReadWindow(call.Arguments)
+			if ok {
+				observation.ReadPath = path
+				observation.ReadStart = start
+				if start > 0 {
+					observation.ReadWindow = strconv.Itoa(start)
+				}
 			}
 		}
 	}
+	observation.CallID = call.ID
 	var covered struct {
 		CoveredPaths []string `json:"covered_paths"`
 	}
@@ -413,6 +450,35 @@ func subtractSorted(values []string, drop ...string) []string {
 		kept = append(kept, value)
 	}
 	return kept
+}
+
+// ReadWindowIsFull reports whether a read record covers the entire file.
+func ReadWindowIsFull(read WorkItemRead) bool {
+	if strings.TrimSpace(read.Window) == "full" {
+		return true
+	}
+	return read.StartLine == 0 && strings.TrimSpace(read.Window) == ""
+}
+
+// ReadWindowCovers reports whether a recorded window covers a read starting
+// at startLine. EndLine 0 means the window reaches the end of file; a
+// full-file request is only covered by a full-file record.
+func ReadWindowCovers(read WorkItemRead, startLine int) bool {
+	if ReadWindowIsFull(read) {
+		return true
+	}
+	start := read.StartLine
+	if start == 0 {
+		parsed, err := strconv.Atoi(strings.TrimSpace(read.Window))
+		if err != nil || parsed <= 0 {
+			return false
+		}
+		start = parsed
+	}
+	if startLine <= 0 || startLine < start {
+		return false
+	}
+	return read.EndLine == 0 || startLine < read.EndLine
 }
 
 func withWorkItem(state State, item WorkItem) State {

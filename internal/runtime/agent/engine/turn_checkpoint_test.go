@@ -111,12 +111,12 @@ func TestCanceledTurnCheckpointKeepsNextPlanAndReadPaths(t *testing.T) {
 	}
 }
 
-func TestFailedTurnCheckpointOmitsOpenToolChain(t *testing.T) {
+func TestFailedTurnCheckpointKeepsNextPlan(t *testing.T) {
 	engine := newEngine(t, &scriptedProvider{}, tool.NewRegistry(nil, nil))
 	engine.turn = 4
 	if err := engine.ApplyPlan(interact.Plan{
 		Steps: []interact.PlanStep{{
-			Title: "half-open tool chain", Status: interact.StepInProgress,
+			Title: "finish parser tests", Status: interact.StepInProgress,
 		}},
 	}); err != nil {
 		t.Fatal(err)
@@ -128,8 +128,8 @@ func TestFailedTurnCheckpointOmitsOpenToolChain(t *testing.T) {
 	if len(messages) != 1 {
 		t.Fatalf("checkpoints = %+v", messages)
 	}
-	if strings.Contains(messages[0].Text(), "half-open tool chain") {
-		t.Fatalf("failed checkpoint kept open work: %s", messages[0].Text())
+	if !strings.Contains(messages[0].Text(), "next: finish parser tests") {
+		t.Fatalf("failed checkpoint lost open work: %s", messages[0].Text())
 	}
 	if !strings.Contains(messages[0].Text(), "provider timeout") {
 		t.Fatalf("failed checkpoint = %s", messages[0].Text())
@@ -164,6 +164,9 @@ func TestClosedTurnCheckpointsBackfillOmittedTurnsWithoutGuessing(t *testing.T) 
 	for _, checkpoint := range engine.closedTurnCheckpointMessages() {
 		if strings.Contains(checkpoint.Text(), "missing overflow test") {
 			t.Fatalf("backfill invented P2 text: %s", checkpoint.Text())
+		}
+		if checkpoint.Turn <= 3 && !strings.Contains(checkpoint.Text(), `"status":"unknown"`) {
+			t.Fatalf("backfill invented terminal success: %s", checkpoint.Text())
 		}
 		switch checkpoint.Turn {
 		case 1:

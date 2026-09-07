@@ -2,9 +2,10 @@ package engine
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"sort"
-	"strings"
 
 	"github.com/fwtllh-png/QCode/internal/adapter/provider"
 	"github.com/fwtllh-png/QCode/internal/observability/trace"
@@ -100,9 +101,11 @@ func (g *verifyGate) evaluate(
 	span := g.engine.tracer().Start(trace.NameVerify, 0, map[string]any{
 		"scope": string(scope), "repair_step": g.extraSteps(),
 	})
+	mutationRevision := g.kernel.MutationRevision()
 	receipt, err := options.Runner.Verify(verifyCtx, verify.Request{
 		Scope: scope, Paths: paths, Diagnostics: g.engine.turnDiagnostics(),
-		WorkspaceRevision: g.engine.sessionRevision, MutationRevision: g.kernel.MutationRevision(),
+		WorkspaceRevision: g.engine.sessionRevision, MutationRevision: mutationRevision,
+		Evidence: g.engine.verificationEvidence(),
 	})
 	if err != nil {
 		span.Set("error", errorText(err))
@@ -112,11 +115,7 @@ func (g *verifyGate) evaluate(
 		// without a working runner, so the error stands.
 		if options.Mode != VerifyModeSoft {
 			_, _ = g.kernel.FinishVerification(
-				g.verificationCommand(
-					turnkernel.VerificationUnavailable,
-					nil,
-					err.Error(),
-				),
+				g.verificationCommand(verify.Receipt{Status: verify.StatusUnavailable, Message: err.Error()}),
 			)
 			return verifyOutcome{}, protocol.NewFault(
 				protocol.CodeUnavailable,
@@ -133,55 +132,26 @@ func (g *verifyGate) evaluate(
 		}
 		receipt = verify.Receipt{
 			Scope: scope, Status: verify.StatusUnavailable, Message: err.Error(),
+			UncoveredPaths: append([]string(nil), paths...),
 		}
 	} else {
 		span.Set("status", receipt.Status)
 		span.End(trace.StatusOK)
 	}
-	var uncovered []string
-	mutationRevision := g.kernel.MutationRevision()
-	if g.kernel.VerificationMustPass() &&
-		receipt.Status == verify.StatusUnavailable {
-		qualityReceipt, missing := g.engine.qualityVerificationReceipt(
-			paths,
-			mutationRevision,
-		)
-		g.attempts = append(g.attempts, receipt)
-		if qualityReceipt.Status == verify.StatusPassed {
-			receipt = qualityReceipt
-		} else {
-			uncovered = missing
-			if len(uncovered) != 0 {
-				qualityReceipt.Message += "; uncovered_paths=" + strings.Join(uncovered, ",")
-			}
-			receipt = qualityReceipt
-		}
-	}
-	actionValue, err := g.kernel.FinishVerification(
-		g.verificationCommand(
-			kernelVerificationStatus(receipt.Status),
-			currentVerificationCallIDs(g.engine, mutationRevision),
-			receipt.Message,
-		),
-	)
+	actionValue, err := g.kernel.FinishVerification(g.verificationCommand(receipt))
 	if err != nil {
 		return verifyOutcome{}, err
 	}
 	action := verifyAction(actionValue)
 	g.attempts = append(g.attempts, receipt)
-	// A verified path outranks one that was merely edited: it is the path the
-	// turn now owes an explanation for.
-	for _, path := range paths {
-		g.engine.contextAuthority().ObservePath(
-			g.engine.options.Workspace,
-			agentcontext.SourceVerified,
-			g.engine.turn,
-			path,
-		)
-	}
 	// Only a pass clears the evidence gap. A failed or unavailable run leaves the
 	// change exactly as unproved as it was before the gate ran.
 	if receipt.Status == verify.StatusPassed {
+		for _, path := range paths {
+			g.engine.contextAuthority().ObservePath(
+				g.engine.options.Workspace, agentcontext.SourceVerified, g.engine.turn, path,
+			)
+		}
 		g.engine.contextAuthority().ObserveVerified(
 			g.engine.options.Workspace,
 			paths,
@@ -192,7 +162,7 @@ func (g *verifyGate) evaluate(
 		// and it is broken", and neither is silence.
 		g.engine.contextAuthority().Failures().NoteVerify(
 			g.engine.turn,
-			string(scope),
+			string(receipt.Scope),
 			string(receipt.Status),
 			verify.FailureDetail(receipt),
 		)
@@ -200,8 +170,7 @@ func (g *verifyGate) evaluate(
 	observed := &VerificationReceipt{
 		Receipt: receipt, Mode: options.Mode, Action: string(action),
 		RepairSteps: g.extraSteps(), Paths: paths,
-		UncoveredPaths: append([]string(nil), uncovered...),
-		Attempts:       append([]verify.Receipt(nil), g.attempts...),
+		Attempts: append([]verify.Receipt(nil), g.attempts...),
 	}
 	if err := send(Verifying, Event{Verification: observed}); err != nil {
 		return verifyOutcome{}, err
@@ -210,20 +179,26 @@ func (g *verifyGate) evaluate(
 }
 
 func (g *verifyGate) verificationCommand(
-	status turnkernel.VerificationStatus,
-	evidenceCalls []string,
-	message string,
+	receipt verify.Receipt,
 ) turnkernel.VerificationFinished {
-	key := fmt.Sprintf(
-		"mutation=%d;status=%s;evidence=%s",
-		g.kernel.MutationRevision(),
-		status,
-		strings.Join(evidenceCalls, ","),
-	)
+	var evidenceCalls []string
+	stableChecks := append([]verify.Check(nil), receipt.Checks...)
+	for index := range stableChecks {
+		if stableChecks[index].CallID != "" {
+			evidenceCalls = append(evidenceCalls, stableChecks[index].CallID)
+		}
+		stableChecks[index].CallID = ""
+	}
+	sort.Strings(evidenceCalls)
+	// Execution IDs are provenance, not progress: a fresh ID must not reset
+	// the repair budget for an unchanged failed check.
+	signature, _ := json.Marshal(stableChecks)
+	key := fmt.Sprintf("mutation=%d;status=%s;checks=%x",
+		g.kernel.MutationRevision(), receipt.Status, sha256.Sum256(signature))
 	return turnkernel.VerificationFinished{
-		Status:        status,
+		Status:        kernelVerificationStatus(receipt.Status),
 		EvidenceCalls: evidenceCalls,
-		Message:       message,
+		Message:       receipt.Message,
 		RepairKey:     key,
 	}
 }
@@ -239,21 +214,6 @@ func kernelVerificationStatus(
 	default:
 		return turnkernel.VerificationUnavailable
 	}
-}
-
-func currentVerificationCallIDs(
-	engine *Engine,
-	mutationRevision uint64,
-) []string {
-	var callIDs []string
-	for _, evidence := range engine.verificationEvidence() {
-		if evidence.MutationRevision == mutationRevision &&
-			evidence.CallID != "" {
-			callIDs = append(callIDs, evidence.CallID)
-		}
-	}
-	sort.Strings(callIDs)
-	return callIDs
 }
 
 // feedback is the repair prompt for the model. It uses a user message with the

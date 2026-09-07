@@ -2019,11 +2019,10 @@ func TestEngineBudgetAndFailedHistoryRollback(t *testing.T) {
 			terminalFault,
 		)
 	}
-	if history := engine.History(); len(history) != 1 ||
-		history[0].Role != provider.RoleSystem ||
-		!strings.Contains(history[0].Text(), "[turn_terminal]") ||
-		!strings.Contains(history[0].Text(), `"goal":"too large"`) ||
-		!strings.Contains(history[0].Text(), `"code":"resource_exhausted"`) {
+	history := engine.History()
+	if len(history) < 2 ||
+		history[0].Text() != "too large" ||
+		!failedTurnCapsuleAt(t, history[len(history)-1], "too large", "resource_exhausted") {
 		t.Fatalf("failed turn capsule = %+v", history)
 	}
 
@@ -2040,10 +2039,13 @@ func TestEngineBudgetAndFailedHistoryRollback(t *testing.T) {
 	if _, err := engine.Run(t.Context(), "rollback", nil); err == nil {
 		t.Fatal("Run() error = nil")
 	}
-	if history := engine.History(); len(history) != 2 ||
-		history[1].Role != provider.RoleSystem ||
-		!strings.Contains(history[1].Text(), `"goal":"rollback"`) ||
-		!strings.Contains(history[1].Text(), `"status":"failed"`) {
+	if history := engine.History(); !failedTurnCapsuleAt(t, history[len(history)-1], "rollback", "") ||
+		!slices.ContainsFunc(history, func(message provider.Message) bool {
+			return message.Text() == "rollback"
+		}) ||
+		!slices.ContainsFunc(history, func(message provider.Message) bool {
+			return strings.Contains(message.Text(), `"goal":"too large"`)
+		}) {
 		t.Fatalf("provider failure capsules = %+v", history)
 	}
 	runtime.streams = []provider.Stream{&providerfixture.SliceStream{Events: []provider.StreamEvent{
@@ -2799,10 +2801,14 @@ func TestFailedTurnCompactsWithinOversizedDurableLastTurn(t *testing.T) {
 		t.Fatalf("terminal context budget = %+v", terminalBudget)
 	}
 	assertToolPairs(t, engine.history)
+	// The failed Turn's closed exchanges (here only the goal plus per-turn
+	// context projections) legitimately persist; partial assistant or tool
+	// traffic from the failing sample must not.
 	for _, message := range engine.history {
 		if message.Turn == 2 &&
-			!strings.HasPrefix(message.Text(), "[turn_terminal]\n") {
-			t.Fatalf("failed transaction entered durable history: %+v", engine.history)
+			(message.Role == provider.RoleAssistant ||
+				message.Role == provider.RoleTool) {
+			t.Fatalf("failed transaction leaked unclosed traffic: %+v", engine.history)
 		}
 	}
 }
@@ -3756,6 +3762,21 @@ func (*echoTool) Descriptor() tool.Descriptor {
 func (t *echoTool) Execute(_ context.Context, raw json.RawMessage) (tool.Result, error) {
 	t.calls.Add(1)
 	return tool.Result{Content: string(raw)}, nil
+}
+
+func failedTurnCapsuleAt(
+	t *testing.T,
+	message provider.Message,
+	goal string,
+	code string,
+) bool {
+	t.Helper()
+	if message.Role != provider.RoleSystem ||
+		!strings.Contains(message.Text(), "[turn_terminal]") ||
+		!strings.Contains(message.Text(), `"goal":"`+goal+`"`) {
+		return false
+	}
+	return code == "" || strings.Contains(message.Text(), `"code":"`+code+`"`)
 }
 
 func assertOneTerminal(t *testing.T, states []State, want State) {

@@ -7,7 +7,6 @@ import (
 	"github.com/fwtllh-png/QCode/internal/adapter/provider"
 	"github.com/fwtllh-png/QCode/internal/adapter/tool"
 	"github.com/fwtllh-png/QCode/internal/observability/verify"
-	agentcontext "github.com/fwtllh-png/QCode/internal/runtime/agent/context"
 )
 
 func (e *Engine) bindVerificationEvidence(
@@ -22,6 +21,27 @@ func (e *Engine) bindVerificationEvidence(
 		return
 	}
 	source := result.Outcome.Facts.Verification
+	scope := e.executionScope()
+	session := result.Outcome.Facts.ProcessSession
+	if source == nil && session != nil && session.SourceSessionID != "" && scope != nil {
+		scope.mu.Lock()
+		pending, exists := scope.state.pendingVerification[session.SourceSessionID]
+		if !session.Running {
+			delete(scope.state.pendingVerification, session.SourceSessionID)
+		}
+		scope.mu.Unlock()
+		if !exists || session.Running {
+			return
+		}
+		pending.Status, pending.ExitCode = verify.StatusFailed, session.ExitCode
+		if session.ExitCode == 0 && !session.Terminated {
+			pending.Status = verify.StatusPassed
+		}
+		if pending.MutationRevision != mutationRevision || batchMutated {
+			pending.Status = verify.StatusUnavailable
+		}
+		source = &pending
+	}
 	if source == nil || source.SchemaVersion != 1 {
 		return
 	}
@@ -31,29 +51,31 @@ func (e *Engine) bindVerificationEvidence(
 	if result.Metadata == nil {
 		result.Metadata = make(map[string]any)
 	}
-	if batchMutated {
+	reject := func(reason string) {
+		result.Outcome.Facts.Verification = nil
+		delete(result.Metadata, verify.EvidenceMetadataKey)
 		result.Metadata["verification_evidence_accepted"] = false
-		result.Metadata["verification_evidence_rejection"] = "same_batch_mutation"
+		result.Metadata["verification_evidence_rejection"] = reason
+	}
+	if batchMutated {
+		reject("same_batch_mutation")
 		return
 	}
 	switch evidence.Status {
-	case verify.StatusPassed, verify.StatusFailed, verify.StatusUnavailable:
+	case verify.StatusPassed, verify.StatusFailed, verify.StatusUnavailable, verify.StatusRunning:
 	default:
-		result.Metadata["verification_evidence_accepted"] = false
-		result.Metadata["verification_evidence_rejection"] = "invalid_status"
+		reject("invalid_status")
 		return
 	}
 	if len(evidence.CoveredPaths) == 0 {
-		result.Metadata["verification_evidence_accepted"] = false
-		result.Metadata["verification_evidence_rejection"] = "missing_covered_paths"
+		reject("missing_covered_paths")
 		return
 	}
 	covered := make([]string, 0, len(evidence.CoveredPaths))
 	for _, path := range evidence.CoveredPaths {
 		relative, ok := verify.CanonicalEvidencePath(path)
 		if !ok {
-			result.Metadata["verification_evidence_accepted"] = false
-			result.Metadata["verification_evidence_rejection"] = "invalid_covered_path"
+			reject("invalid_covered_path")
 			return
 		}
 		if !slices.Contains(covered, relative) {
@@ -62,37 +84,41 @@ func (e *Engine) bindVerificationEvidence(
 	}
 	slices.Sort(covered)
 	evidence.CoveredPaths = covered
+	if evidence.StartedCallID == "" {
+		evidence.StartedCallID = call.ID
+	}
 	evidence = evidence.Bind(call.ID, e.sessionRevision, mutationRevision)
 	result.Outcome.Facts.Verification = &evidence
+	result.Metadata[verify.EvidenceMetadataKey] = evidence
+	if evidence.Status == verify.StatusRunning {
+		if scope != nil && session != nil && session.Running && session.SourceSessionID != "" {
+			scope.mu.Lock()
+			if scope.state.pendingVerification == nil {
+				scope.state.pendingVerification = make(map[string]verify.Evidence)
+			}
+			scope.state.pendingVerification[session.SourceSessionID] = evidence
+			scope.mu.Unlock()
+		}
+		result.Metadata["verification_evidence_accepted"] = false
+		result.Metadata["verification_evidence_rejection"] = "process_running"
+		return
+	}
+	if evidence.InputDigest != "" {
+		digest, err := verify.InputDigest(e.options.Workspace, covered)
+		if err != nil || digest != evidence.InputDigest {
+			evidence.Status = verify.StatusUnavailable
+			result.Metadata["verification_evidence_rejection"] = "inputs_changed"
+		}
+	}
+	result.Outcome.Facts.Verification = &evidence
+	result.Metadata[verify.EvidenceMetadataKey] = evidence
 	result.Metadata["verification_evidence_accepted"] = true
-	scope := e.executionScope()
 	if scope == nil {
 		return
 	}
 	scope.mu.Lock()
 	scope.state.verification = append(scope.state.verification, evidence)
 	scope.mu.Unlock()
-}
-
-func (e *Engine) qualityVerificationReceipt(
-	paths []string,
-	mutationRevision uint64,
-) (verify.Receipt, []string) {
-	canonical := make([]string, 0, len(paths))
-	for _, path := range paths {
-		if relative, ok := agentcontext.WorkspaceRelative(
-			e.options.Workspace,
-			path,
-		); ok {
-			path = relative
-		}
-		if !slices.Contains(canonical, path) {
-			canonical = append(canonical, path)
-		}
-	}
-	return verify.QualityEvidenceReceipt(
-		canonical, mutationRevision, e.verificationEvidence(),
-	)
 }
 
 func (e *Engine) verificationEvidence() []verify.Evidence {

@@ -63,6 +63,17 @@ func applyEvaluateTurnStep(
 	case current.Convergence != nil:
 		if current.Convergence.FinalizationAttempted {
 			transition.State.NextAction = StepActionBlock
+			if current.Completion != nil &&
+				(current.Completion.Reason == "invalid_declaration" ||
+					current.Completion.Reason == "incomplete_declaration") &&
+				current.RepairBudgets[RepairDeclaration].Steps < current.Policy.DeclarationRepairLimit {
+				if err := spendRepairBudget(transition, RepairDeclaration,
+					"convergence_declaration", current.Policy.DeclarationRepairLimit); err != nil {
+					return err
+				}
+				transition.State.Convergence.FinalizationAttempted = false
+				transition.State.NextAction = StepActionFinalize
+			}
 		} else {
 			transition.State.NextAction = StepActionFinalize
 		}
@@ -132,8 +143,8 @@ func completionRejectionAction(reason string) string {
 	switch reason {
 	case "no_observed_changes":
 		return "perform_workspace_mutation"
-	case "quality_verification_required":
-		return "run_quality_verification"
+	case "verification_evidence_required":
+		return "exec_command"
 	case "plan_progress_incomplete":
 		return RequiredActionFinishOrDeclareIncomplete
 	case "pending_actions":

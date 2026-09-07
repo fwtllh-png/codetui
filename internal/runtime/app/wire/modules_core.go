@@ -173,14 +173,12 @@ func (builtinToolsModule) Build(
 		)
 		return nil
 	}
-	registry, handles, err := builtin.NewWithRuntimeState(
+	registry, handles, err := builtin.NewWithAuthority(
 		state.config.execution.Workspace,
 		state.platform.backend,
 		state.session.content,
 		state.session.processes,
 		state.platform.repositoryIndex,
-		state.config.workspaceStateRoot,
-		state.config.workspaceStateID,
 		state.platform.leaseAuthority, state.config.execution.LeaseTimeout,
 		state.platform.web,
 	)

@@ -38,6 +38,7 @@ var commandContracts = []CommandContract{
 	{Name: "evaluate_turn_step", Family: CommandFamilySampling},
 	{Name: "observe_progress", Family: CommandFamilySampling, AllowedPhases: []Phase{PhaseSampling}},
 	{Name: "bind_work_item", Family: CommandFamilyLifecycle, AllowedPhases: []Phase{PhaseCreated, PhasePreparing, PhaseSampling}},
+	{Name: "continuation_recorded", Family: CommandFamilyLifecycle},
 	{Name: "convergence_requested", Family: CommandFamilySampling},
 	{Name: "convergence_finalization_started", Family: CommandFamilySampling, AllowedPhases: []Phase{PhaseSampling}},
 	{Name: "tool_calls_proposed", Family: CommandFamilyTool, AllowedPhases: []Phase{PhaseSampling}},

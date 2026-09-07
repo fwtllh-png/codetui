@@ -6,7 +6,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
-	"strings"
 
 	"github.com/fwtllh-png/QCode/internal/adapter/tool"
 	"github.com/fwtllh-png/QCode/internal/config"
@@ -280,6 +279,9 @@ func childEngineOptions(
 		// stance that only shaped the prompt would not be a stance at all.
 		options.Security.SetModePermission(policy.ModePlan, policy.PermissionNever)
 	}
+	if slices.Contains(spec.AllowedTools, "verify") {
+		options.VerificationOnly = true
+	}
 	if options.Security != nil {
 		options.ProfilePermissionCeiling = options.Security.PermissionValue()
 	}
@@ -342,7 +344,7 @@ func childRoleAllowsTool(spec app.ChildSpec, descriptor tool.Descriptor) bool {
 				return true
 			}
 		case "verify":
-			if strings.HasPrefix(descriptor.Name, "quality_") {
+			if descriptor.Name == "exec_command" || descriptor.Name == "write_stdin" {
 				return true
 			}
 		case descriptor.Name:

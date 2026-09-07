@@ -84,7 +84,7 @@ Web Settings 会显示 Provider、Model、Credential 状态与校验结果。确
 
 本地 Fixture 或 Socket 测试被拒绝且原因为
 `managed_proxy` / `authority_unverified` 时：保持 `allow_loopback=true`，省略
-`network_targets`，不要改用 `quality_process_smoke` 冒充单测通过。该错误在审批
+`network_targets`，通过 `exec_command` 执行测试并声明验证用途，不要把服务存活当作测试通过。该错误在审批
 已生效后仍出现，表示执行权与托管代理未对齐；按工具结果里的 `required_action`
 处理，而不是改端口 `0`。
 

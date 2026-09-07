@@ -189,12 +189,15 @@ func (a *Adapter) ClassifyHTTP(failure providerwire.HTTPFailure) error {
 	if message == "" {
 		message = fmt.Sprintf("provider returned HTTP %d", failure.Status)
 	}
-	code := provider.FailureRateLimit
-	if a.id != model.AdapterOpenAICompatible ||
-		failure.Status != http.StatusTooManyRequests {
+	businessCode := jsonScalarText(payload.Error.Code)
+	code, known := structuredHTTPFailure(failure.ProviderID, businessCode, payload.Error.Type)
+	if !known && a.id == model.AdapterOpenAICompatible &&
+		failure.Status == http.StatusTooManyRequests {
+		code = provider.FailureRateLimit
+	} else if !known {
 		code = classifyHTTPFailure(
 			failure.Status,
-			jsonScalarText(payload.Error.Code),
+			businessCode,
 			payload.Error.Type,
 			message,
 		)
@@ -210,6 +213,31 @@ func (a *Adapter) ClassifyHTTP(failure providerwire.HTTPFailure) error {
 			"X-Deepseek-Request-Id",
 		),
 	)
+}
+
+func structuredHTTPFailure(providerID, code, kind string) (provider.FailureCode, bool) {
+	for _, value := range []string{code, kind} {
+		switch value {
+		case "insufficient_quota", "billing_hard_limit_reached":
+			return provider.FailureQuota, true
+		}
+	}
+	// GLM business codes: https://docs.bigmodel.cn/cn/faq/api-code.
+	// Numeric codes are scoped to the provider, never inferred from prose.
+	if providerID == "glm" {
+		switch code {
+		case "1113", "1308", "1309", "1310", "1314",
+			"1316", "1317", "1318", "1319", "1320", "1321":
+			return provider.FailureQuota, true
+		case "1311", "1313", "1315":
+			return provider.FailureAuth, true
+		case "1302", "1305":
+			return provider.FailureRateLimit, true
+		case "1261":
+			return provider.FailureContextWindowExceeded, true
+		}
+	}
+	return "", false
 }
 
 func classifyHTTPFailure(

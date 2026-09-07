@@ -40,7 +40,8 @@ func (c *Client) openResponse(
 	}
 	errorText := boundedBody(response.Body)
 	problem := adapter.ClassifyHTTP(providerwire.HTTPFailure{
-		Status: response.StatusCode, Header: response.Header, Body: errorText,
+		ProviderID: request.Route.ProviderID(),
+		Status:     response.StatusCode, Header: response.Header, Body: errorText,
 	})
 	problem = attributeProviderFault(
 		problem,

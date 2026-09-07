@@ -4,12 +4,10 @@
   "model": "fixture-model",
   "streams": [
     "write.sse",
-    "declare-first.sse",
     "quality.sse",
     "declare-final.sse",
     "complete.sse",
     "write.sse",
-    "declare-first.sse",
     "quality.sse",
     "declare-final.sse",
     "complete.sse"

@@ -5,6 +5,9 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/fwtllh-png/QCode/internal/adapter/provider"
+	"github.com/fwtllh-png/QCode/internal/adapter/tool"
 )
 
 func TestFailureDeltaRoundTrip(t *testing.T) {
@@ -14,6 +17,33 @@ func TestFailureDeltaRoundTrip(t *testing.T) {
 	restored := ApplyFailureDelta(failures.Delta())
 	if !reflect.DeepEqual(restored.List(), failures.List()) {
 		t.Fatalf("restored = %+v, want %+v", restored.List(), failures.List())
+	}
+}
+
+func TestFailureIdentityDoesNotCollapseDistinctWhitespace(t *testing.T) {
+	ledger := NewFailures()
+	ledger.NoteTool(1, "exec_command", `expected "a  b"`)
+	ledger.NoteTool(1, "exec_command", `expected "a b"`)
+	if ledger.Len() != 2 {
+		t.Fatal("display normalization merged distinct original failures")
+	}
+}
+
+func TestProcessFailureSummaryRetainsTheDiagnosticTail(t *testing.T) {
+	authority := NewAuthority()
+	detail := "error: compiler could not locate the standard library"
+	result := tool.Result{
+		IsError: true, Content: strings.Repeat("build output\n", 100) + detail,
+		Outcome: &tool.Outcome{Facts: &tool.OutcomeFacts{
+			ProcessSession: &tool.ProcessSessionFact{ExitCode: 2},
+			Failure:        &tool.FailureFact{Category: "command_failure"},
+		}},
+	}
+	authority.ObserveToolFailure(provider.ToolCall{Name: "exec_command"}, result, 1)
+	failures := authority.Failures().List()
+	if len(failures) != 1 || !strings.Contains(failures[0].Reason, detail) ||
+		!strings.Contains(failures[0].Reason, "exit=2") || len(failures[0].Reason) > failureReasonBytes {
+		t.Fatalf("diagnostic tail was squeezed out: %+v", failures)
 	}
 }
 
@@ -86,5 +116,17 @@ func TestNilFailuresIsUsable(t *testing.T) {
 	ledger.NoteVerify(1, "repository", "failed", "")
 	if ledger.Len() != 0 || ledger.List() != nil || ledger.Clone() != nil {
 		t.Fatal("nil ledger did not stay empty")
+	}
+}
+
+func TestFailureIdentitySurvivesTruncationAndRestore(t *testing.T) {
+	ledger := NewFailures()
+	prefix := strings.Repeat("same ", failureReasonBytes)
+	ledger.NoteTool(1, "exec_command", prefix+"compiler missing")
+	ledger.NoteTool(1, "exec_command", prefix+"assertion failed")
+	restored := ApplyFailureDelta(ledger.Delta())
+	restored.NoteTool(2, "exec_command", prefix+"compiler missing")
+	if restored.Len() != 2 || restored.List()[1].Count != 2 {
+		t.Fatalf("different full failures merged or lost identity: %+v", restored.List())
 	}
 }

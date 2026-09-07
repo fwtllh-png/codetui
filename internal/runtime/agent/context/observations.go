@@ -2,6 +2,7 @@ package agentcontext
 
 import (
 	"encoding/json"
+	"fmt"
 	"path/filepath"
 	"strings"
 
@@ -46,7 +47,18 @@ func WorkspaceRelative(workspace string, path string) (string, bool) {
 		}
 		return filepath.ToSlash(relative), true
 	}
-	return "", false
+	// A deleted path may no longer exist, but its nearest surviving parent can
+	// still resolve an alternate spelling of the workspace root.
+	resolved, err := resolveMissingWorkspacePath(clean)
+	if err != nil || resolved == clean {
+		return "", false
+	}
+	relative, err := filepath.Rel(roots[len(roots)-1], resolved)
+	if err != nil || relative == "." || relative == ".." ||
+		strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return "", false
+	}
+	return filepath.ToSlash(relative), true
 }
 
 func (a *Authority) ObservePath(
@@ -116,11 +128,23 @@ func (a *Authority) ObserveToolFailure(
 	result tool.Result,
 	turn uint64,
 ) {
-	reason := result.Content
+	category := ""
 	if result.Outcome != nil && result.Outcome.Facts != nil &&
 		result.Outcome.Facts.Failure != nil &&
 		result.Outcome.Facts.Failure.Category != "" {
-		reason = result.Outcome.Facts.Failure.Category + ": " + reason
+		category = result.Outcome.Facts.Failure.Category + ": "
+	}
+	reason := category + result.Content
+	if result.Outcome != nil && result.Outcome.Facts != nil &&
+		result.Outcome.Facts.ProcessSession != nil {
+		process := result.Outcome.Facts.ProcessSession
+		prefix := category + fmt.Sprintf("process exit=%d terminated=%t: ", process.ExitCode, process.Terminated)
+		tailBudget := max(0, failureReasonBytes-len(prefix)-3)
+		tail := strings.TrimSpace(result.Content)
+		if len(tail) > tailBudget {
+			tail = strings.ToValidUTF8(tail[len(tail)-tailBudget:], "")
+		}
+		reason = prefix + tail + "\n" + result.Content
 	}
 	a.Failures().NoteTool(turn, call.Name, reason)
 }

@@ -41,27 +41,15 @@ func (e *Engine) observationGate(
 	}
 	item, _ := e.admissionWorkItem()
 	read, known := e.knownWorkItemRead(item, path)
-	if known && !workItemWindowIsNew(read, startLine) {
-		action := item.RequiredActionOr("file_edit")
-		if action == "" {
-			action = "file_edit"
+	if known {
+		replay, invalidation := e.replayCoveredRead(read, path, startLine)
+		if replay != nil {
+			return replay
 		}
-		return &tool.Result{
-			Content: fmt.Sprintf(
-				"file_read of a Known Work Item path requires a new "+
-					"start_line window or turn_history/result_get. "+
-					"required_action=%s path=%q",
-				action,
-				path,
-			),
-			IsError: true,
-			Metadata: map[string]any{
-				"error_category":  "work_item_known_read_refused",
-				"path":            path,
-				"required_action": action,
-				"retry_original":  false,
-			},
-		}
+		// The record cannot answer this read; the necessary read is
+		// admitted and the invalidation reason is stamped onto its result
+		// so the refresh is explained rather than silent.
+		e.noteReadInvalidation(call.ID, invalidation)
 	}
 	if startLine > 0 {
 		return nil
@@ -92,17 +80,6 @@ func (e *Engine) observationGate(
 			"start_line":      locatedLine,
 		},
 	}
-}
-
-func workItemWindowIsNew(read turnkernel.WorkItemRead, startLine int) bool {
-	if startLine <= 0 {
-		return false
-	}
-	window := strings.TrimSpace(read.Window)
-	if window == "" || window == "full" {
-		return true
-	}
-	return window != fmt.Sprintf("%d", startLine)
 }
 
 func (e *Engine) admissionWorkItem() (turnkernel.WorkItem, bool) {

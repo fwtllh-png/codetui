@@ -71,8 +71,8 @@ Resolver、Availability、Repeat Policy），Policy-sensitive 字段是决策而
 可编码、Metadata Structured 且 JSON-compatible；Result Bounding 与 Routing 仍由
 Registry 负责。
 
-几乎所有 Executor 都经过 Typed Boundary，包括 Tier-2 工具（quality、handle、
-automation 与 MCP Helper）。当 Schema 由他方拥有（Remote MCP Catalog，或 Concrete
+几乎所有 Executor 都经过 Typed Boundary，包括进程、Handle、Automation 与 MCP
+Helper。当 Schema 由他方拥有（Remote MCP Catalog，或 Concrete
 Identity 拥有自身 Contract 的 Executor）时，只有在带 `typed-boundary-exception:`
 注释说明（Migration Guard Test 强制）的前提下才保留 Raw JSON。
 

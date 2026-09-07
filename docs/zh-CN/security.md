@@ -143,7 +143,7 @@ Web Markdown 不执行原始 HTML 或危险 URL。同源图片可以直接显示
 - 可增权的 Typed Sandbox Denial 可通过 Critical One-shot Approval 申请一个精确
   Path、Host/Port 或 Process Capability。重试使用递增 Revision 的 Permission
   Profile，并保持在同一 Strong Sandbox；Untyped 或重复 Denial 均 Fail Closed。
-- macOS 上 `exec_command`、`quality_test` 与 `quality_verify` 的进程出口仅允许
+- macOS 上 `exec_command` 的进程出口仅允许
   通过 Runtime-owned loopback proxy，并要求用 `network_targets` 显式声明 Host、
   Port、Protocol、传输 Method 和私网权限。HTTPS 目标必须使用 `CONNECT`，HTTP
   目标使用普通 HTTP Method。已声明的 Process Network Resource 会先于 Process
@@ -152,7 +152,7 @@ Web Markdown 不执行原始 HTML 或危险 URL。同源图片可以直接显示
   Closed。该 Loopback Proxy 返回 CONNECT 403 表示目标未声明或未授权，并不表示
   远端服务不可达。Linux 在 namespace proxy bridge 交付前保持进程全禁网。
 - 测试 Fixture 或本地开发服务必须绑定并连接临时 Localhost 端口时，
-  `exec_command`、`quality_test` 与 `quality_verify` 可声明 `allow_loopback`。
+  `exec_command` 可声明 `allow_loopback`。
   该能力默认关闭；Strong Sandbox 内仅包含精确 Localhost Grant 且没有 Workspace
   写入的调用按有界 Network Read 评估，`suggest` 要求审批，`auto` 自动 Review。
   macOS Profile 只增加 Localhost Inbound/Outbound Seatbelt Rule；非 Loopback
@@ -162,9 +162,11 @@ Web Markdown 不执行原始 HTML 或危险 URL。同源图片可以直接显示
   `required_action=keep_allow_loopback_omit_network_targets`，不能把临时端口
   写进 `network_targets`。Effective Profile 与 Attempt Receipt 都会记录该
   Loopback Grant。
-- `quality_test`、`quality_diagnostics`、`quality_review` 和 `quality_verify`
-  使用 POSIX `set -e` 的 Fail-fast 语义，不能由尾部日志命令覆盖前序检查的非零
-  退出码。需要有意接受失败时必须在 Command 中显式表达。
+- 声明 `verification` 的 `exec_command` 使用 POSIX `set -e`，并要求精确的
+  `covered_paths`。声明不能扩大执行权限；验证命令不能声明 Workspace 写入，
+  仍经过相同 Guard、审批、Journal 和 Sandbox。证据在启动前绑定输入摘要，
+  结束时检查摘要和 Mutation Revision；运行中或被终止的进程不提供通过证据。
+  Verifier 子代理只允许带验证声明的进程启动，不因入口统一取得写权限。
 - Language Server 按文件类型选择实际安装的 Server，进程在 Workspace Read-only、
   Network Denied 的 Strong Sandbox 中运行。format、code action 和 rename 只返回
   edits，不直接取得文件写权限。
@@ -178,13 +180,8 @@ Web Markdown 不执行原始 HTML 或危险 URL。同源图片可以直接显示
 - Git merge、rebase、cherry-pick、restore、stash、tag 和 amend 均通过 VCS Broker
   的固定 argv 白名单执行；不提供任意 Git 参数、force push 或隐式远端。可能改写历史、
   产生冲突或丢弃内容的操作要求单次审批。
-- `quality_process_smoke` 仅在持久化 Workspace State 可提供 Artifact Staging 和
-  Process Broker 时开放。原始 Workspace 或 Sandbox Home 路径只作为 Snapshot 输入，
-  实际进程只能从 Broker-owned Snapshot 启动；Guard 强制 `ApprovalOnce`，且不提供
-  Session/Always Grant。该工具只观察进程是否活过声明时长，再终止回收；
-  `exit_code=-1` 与 `status=survived` 不是单测或 `quality_verify` 通过，也不能覆盖
-  变更路径。本地 Fixture / Socket 测试必须使用 `quality_test` 或 `quality_verify`
-  并声明 `allow_loopback`。
+- 不提供绕出 OS Sandbox 的模型侧宿主进程冒烟入口。开发服务和 Fixture 使用
+  `exec_command` 及显式 `allow_loopback`；观察到服务存活不能当作测试通过。
 - Linux Strong Sandbox 将 Landlock、`no_new_privs`、seccomp 与 `execve` 固定在
   同一个 OS Thread。Seccomp 拒绝 Tracing、跨进程内存访问、Namespace 创建、
   `clone3` 与 `io_uring`；Restricted Network Mode 只保留 AF_UNIX 进程内 IPC。

@@ -1,7 +1,9 @@
 package agentcontext
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"reflect"
 	"testing"
@@ -140,6 +142,42 @@ func TestContextManifestAppendsHistoryAndBoundsOwnerSegments(t *testing.T) {
 	}
 	if _, err := LoadContextManifest(t.Context(), store, thirdManifest); err != nil {
 		t.Fatalf("load changed message turns: %v", err)
+	}
+}
+
+func TestContextManifestLoadsLegacyFailureWithoutDigest(t *testing.T) {
+	store := &manifestMemoryStore{}
+	snapshot := manifestSnapshot(t, 1, []provider.Message{
+		turnMessage(provider.RoleUser, "one", 1),
+	})
+	snapshot.Failures.Failures = []Failure{{
+		Kind: KindTool, Name: "exec_command", Reason: "exit 1",
+		Turn: 1, Count: 1,
+	}}
+	if err := snapshot.Seal(); err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.Marshal(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(encoded, []byte(`"Digest":""`)) {
+		t.Fatal("empty additive failure field changed the legacy snapshot digest")
+	}
+	manifest, err := BuildContextManifest(
+		t.Context(), store, "thread-legacy", "turn-legacy",
+		snapshot, nil, DefaultManifestLimits(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restored, err := LoadContextManifest(t.Context(), store, manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if restored.Digest != snapshot.Digest ||
+		!reflect.DeepEqual(restored.Failures, snapshot.Failures) {
+		t.Fatalf("restored=%+v want=%+v", restored, snapshot)
 	}
 }
 

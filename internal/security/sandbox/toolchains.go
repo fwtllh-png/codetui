@@ -4,7 +4,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"slices"
 	"strings"
 )
@@ -32,19 +31,7 @@ func discoverToolchains(
 	probes := []toolchainProbe{
 		{
 			commands: []string{"go"},
-			root: func(_ string) string {
-				if value := strings.TrimSpace(os.Getenv("GOROOT")); value != "" {
-					return value
-				}
-				return runtime.GOROOT()
-			},
-			environment: func() (string, string) {
-				root := strings.TrimSpace(os.Getenv("GOROOT"))
-				if root == "" {
-					root = runtime.GOROOT()
-				}
-				return "GOROOT", root
-			},
+			root:     goToolchainRoot,
 		},
 		{
 			commands: []string{"rustup", "cargo", "rustc"},
@@ -109,12 +96,18 @@ func discoverToolchains(
 				nil,
 			)
 			if probe.root != nil {
+				root := probe.root(executable)
 				addToolchainReadDirectory(
 					&exposure.ReadRoots,
-					probe.root(executable),
+					root,
 					workspace,
 					seen,
 				)
+				if command == "go" {
+					if canonical, ok := canonicalToolchainDirectory(root, workspace); ok {
+						exposure.Environment = append(exposure.Environment, "GOROOT="+canonical)
+					}
+				}
 			}
 			roots, files := executableRuntimeDependencies(executable)
 			for _, root := range roots {
@@ -143,10 +136,27 @@ func discoverToolchains(
 			}
 		}
 	}
+	discoverPlatformToolchains(&exposure, workspace, seen)
 	slices.Sort(exposure.ReadRoots)
 	slices.Sort(exposure.ReadFiles)
 	slices.Sort(exposure.Environment)
 	return exposure
+}
+
+func goToolchainRoot(executable string) string {
+	if root := strings.TrimSpace(os.Getenv("GOROOT")); root != "" {
+		return root
+	}
+	// The running QCode binary may be built with -trimpath or a different Go.
+	// Bind GOROOT to the selected, symlink-resolved executable instead.
+	root := filepath.Dir(filepath.Dir(executable))
+	for _, directory := range []string{"src", filepath.Join("pkg", "tool")} {
+		info, err := os.Stat(filepath.Join(root, directory))
+		if err != nil || !info.IsDir() {
+			return ""
+		}
+	}
+	return root
 }
 
 func executableSearchDirectories() []string {

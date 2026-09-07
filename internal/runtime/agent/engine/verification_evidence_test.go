@@ -9,31 +9,48 @@ import (
 	"github.com/fwtllh-png/QCode/internal/adapter/provider"
 	"github.com/fwtllh-png/QCode/internal/adapter/tool"
 	"github.com/fwtllh-png/QCode/internal/observability/verify"
+	agentcontext "github.com/fwtllh-png/QCode/internal/runtime/agent/context"
 	"github.com/fwtllh-png/QCode/internal/runtime/agent/turnkernel"
 	"github.com/fwtllh-png/QCode/internal/runtime/protocol"
 )
 
 type unavailableVerifier struct{}
 
+func (e *Engine) commandVerificationReceipt(paths []string, revision uint64) (verify.Receipt, []string) {
+	canonical := make([]string, len(paths))
+	for index, path := range paths {
+		canonical[index] = path
+		if relative, ok := agentcontext.WorkspaceRelative(e.options.Workspace, path); ok {
+			canonical[index] = relative
+		}
+	}
+	return verify.CommandEvidenceReceipt(canonical, revision, e.verificationEvidence())
+}
+
 func (unavailableVerifier) Verify(
 	_ context.Context, request verify.Request,
 ) (verify.Receipt, error) {
+	if len(request.Evidence) != 0 {
+		receipt, _ := verify.CommandEvidenceReceipt(request.Paths, request.MutationRevision, request.Evidence)
+		return receipt, nil
+	}
 	return verify.Receipt{
 		Scope: request.Scope, Status: verify.StatusUnavailable,
-		Message: "diagnostics unavailable",
+		UncoveredPaths: append([]string(nil), request.Paths...),
+		Message:        "diagnostics unavailable",
 	}, nil
 }
 
-func TestQualityEvidenceCoversCurrentMutationRevision(t *testing.T) {
+func TestCommandEvidenceCoversCurrentMutationRevision(t *testing.T) {
 	engine := newEngine(t, &scriptedProvider{}, tool.NewRegistry(nil, nil))
-	result := qualityEvidenceResult(
+	result := commandEvidenceResult(
 		verify.StatusPassed, []string{"a.go", "b.go"},
 	)
 	engine.bindVerificationEvidence(provider.ToolCall{
-		ID: "verify-1", Name: "quality_verify",
+		ID: "verify-1", Name: "exec_command",
 	}, &result, false, 1)
 
-	receipt, uncovered := engine.qualityVerificationReceipt([]string{"a.go", "b.go"}, 1)
+	receipt, uncovered := engine.commandVerificationReceipt([]string{"a.go", "b.go"}, 1)
 	if receipt.Status != verify.StatusPassed || len(uncovered) != 0 {
 		t.Fatalf("receipt = %+v, uncovered = %v", receipt, uncovered)
 	}
@@ -43,15 +60,15 @@ func TestQualityEvidenceCoversCurrentMutationRevision(t *testing.T) {
 	}
 }
 
-func TestQualityEvidenceCoversAbsoluteRecoveryDraftPaths(t *testing.T) {
+func TestCommandEvidenceCoversAbsoluteRecoveryDraftPaths(t *testing.T) {
 	engine := newEngine(t, &scriptedProvider{}, tool.NewRegistry(nil, nil))
 	engine.options.Workspace = t.TempDir()
-	result := qualityEvidenceResult(verify.StatusPassed, []string{"a.go"})
+	result := commandEvidenceResult(verify.StatusPassed, []string{"a.go"})
 	engine.bindVerificationEvidence(provider.ToolCall{
-		ID: "verify-1", Name: "quality_verify",
+		ID: "verify-1", Name: "exec_command",
 	}, &result, false, 1)
 
-	receipt, uncovered := engine.qualityVerificationReceipt(
+	receipt, uncovered := engine.commandVerificationReceipt(
 		[]string{filepath.Join(engine.options.Workspace, "a.go")},
 		1,
 	)
@@ -60,31 +77,31 @@ func TestQualityEvidenceCoversAbsoluteRecoveryDraftPaths(t *testing.T) {
 	}
 }
 
-func TestQualityEvidenceRejectsPartialAndStaleCoverage(t *testing.T) {
+func TestCommandEvidenceRejectsPartialAndStaleCoverage(t *testing.T) {
 	engine := newEngine(t, &scriptedProvider{}, tool.NewRegistry(nil, nil))
-	result := qualityEvidenceResult(verify.StatusPassed, []string{"a.go"})
+	result := commandEvidenceResult(verify.StatusPassed, []string{"a.go"})
 	engine.bindVerificationEvidence(provider.ToolCall{
-		ID: "verify-1", Name: "quality_test",
+		ID: "verify-1", Name: "exec_command",
 	}, &result, false, 1)
 
-	receipt, uncovered := engine.qualityVerificationReceipt([]string{"a.go", "b.go"}, 1)
+	receipt, uncovered := engine.commandVerificationReceipt([]string{"a.go", "b.go"}, 1)
 	if receipt.Status != verify.StatusUnavailable ||
 		len(uncovered) != 1 || uncovered[0] != "b.go" {
 		t.Fatalf("receipt = %+v, uncovered = %v", receipt, uncovered)
 	}
-	receipt, uncovered = engine.qualityVerificationReceipt([]string{"a.go"}, 2)
+	receipt, uncovered = engine.commandVerificationReceipt([]string{"a.go"}, 2)
 	if receipt.Status != verify.StatusUnavailable ||
 		len(uncovered) != 1 || uncovered[0] != "a.go" {
 		t.Fatalf("stale receipt = %+v, uncovered = %v", receipt, uncovered)
 	}
 }
 
-func TestQualityEvidenceRetainsFailureWithoutGrantingCoverage(t *testing.T) {
+func TestCommandEvidenceRetainsFailureWithoutGrantingCoverage(t *testing.T) {
 	engine := newEngine(t, &scriptedProvider{}, tool.NewRegistry(nil, nil))
-	result := qualityEvidenceResult(verify.StatusFailed, []string{"a.go"})
+	result := commandEvidenceResult(verify.StatusFailed, []string{"a.go"})
 	result.IsError = true
 	engine.bindVerificationEvidence(provider.ToolCall{
-		ID: "verify-failed", Name: "quality_test",
+		ID: "verify-failed", Name: "exec_command",
 	}, &result, false, 1)
 
 	if accepted, _ := result.Metadata["verification_evidence_accepted"].(bool); !accepted {
@@ -94,10 +111,10 @@ func TestQualityEvidenceRetainsFailureWithoutGrantingCoverage(t *testing.T) {
 		provider.ToolCall{ID: "complete", Name: "turn_complete"},
 		tool.Result{}, false, 1, 1,
 	)
-	if len(candidate.QualityCalls) != 0 {
-		t.Fatalf("failed quality calls bound to completion: %+v", candidate.QualityCalls)
+	if len(candidate.VerificationCalls) != 0 {
+		t.Fatalf("failed verification calls bound to completion: %+v", candidate.VerificationCalls)
 	}
-	receipt, uncovered := engine.qualityVerificationReceipt([]string{"a.go"}, 1)
+	receipt, uncovered := engine.commandVerificationReceipt([]string{"a.go"}, 1)
 	if receipt.Status != verify.StatusFailed || receipt.Errors != 1 ||
 		len(receipt.Checks) != 1 ||
 		receipt.Checks[0].Status != verify.StatusFailed ||
@@ -106,19 +123,19 @@ func TestQualityEvidenceRetainsFailureWithoutGrantingCoverage(t *testing.T) {
 	}
 }
 
-func TestLaterPassingQualityRetrySupersedesSameFailedCommand(t *testing.T) {
+func TestLaterPassingCommandRetrySupersedesSameFailedCommand(t *testing.T) {
 	engine := newEngine(t, &scriptedProvider{}, tool.NewRegistry(nil, nil))
-	failed := qualityEvidenceResult(verify.StatusFailed, []string{"a.go"})
+	failed := commandEvidenceResult(verify.StatusFailed, []string{"a.go"})
 	failed.IsError = true
 	engine.bindVerificationEvidence(provider.ToolCall{
-		ID: "verify-failed", Name: "quality_test",
+		ID: "verify-failed", Name: "exec_command",
 	}, &failed, false, 1)
-	passed := qualityEvidenceResult(verify.StatusPassed, []string{"a.go"})
+	passed := commandEvidenceResult(verify.StatusPassed, []string{"a.go"})
 	engine.bindVerificationEvidence(provider.ToolCall{
-		ID: "verify-passed", Name: "quality_test",
+		ID: "verify-passed", Name: "exec_command",
 	}, &passed, false, 1)
 
-	receipt, uncovered := engine.qualityVerificationReceipt([]string{"a.go"}, 1)
+	receipt, uncovered := engine.commandVerificationReceipt([]string{"a.go"}, 1)
 	if receipt.Status != verify.StatusPassed || len(uncovered) != 0 ||
 		len(receipt.Checks) != 1 ||
 		receipt.Checks[0].Status != verify.StatusPassed {
@@ -128,19 +145,19 @@ func TestLaterPassingQualityRetrySupersedesSameFailedCommand(t *testing.T) {
 
 func TestCorrectedQualityCommandSupersedesFailedCoverage(t *testing.T) {
 	engine := newEngine(t, &scriptedProvider{}, tool.NewRegistry(nil, nil))
-	failed := qualityEvidenceResult(verify.StatusFailed, []string{"a.go"})
+	failed := commandEvidenceResult(verify.StatusFailed, []string{"a.go"})
 	failed.IsError = true
 	failed.Outcome.Facts.Verification.CommandDigest = "sha256:bad-command"
 	engine.bindVerificationEvidence(provider.ToolCall{
-		ID: "verify-failed", Name: "quality_test",
+		ID: "verify-failed", Name: "exec_command",
 	}, &failed, false, 1)
-	passed := qualityEvidenceResult(verify.StatusPassed, []string{"a.go"})
+	passed := commandEvidenceResult(verify.StatusPassed, []string{"a.go"})
 	passed.Outcome.Facts.Verification.CommandDigest = "sha256:fixed-command"
 	engine.bindVerificationEvidence(provider.ToolCall{
-		ID: "verify-passed", Name: "quality_test",
+		ID: "verify-passed", Name: "exec_command",
 	}, &passed, false, 1)
 
-	receipt, uncovered := engine.qualityVerificationReceipt([]string{"a.go"}, 1)
+	receipt, uncovered := engine.commandVerificationReceipt([]string{"a.go"}, 1)
 	if receipt.Status != verify.StatusPassed || len(uncovered) != 0 ||
 		len(receipt.Checks) != 1 ||
 		receipt.Checks[0].Command != "sha256:fixed-command" {
@@ -148,78 +165,78 @@ func TestCorrectedQualityCommandSupersedesFailedCoverage(t *testing.T) {
 	}
 }
 
-func TestGenericVerifyCannotSupersedeFailedProcessSmoke(t *testing.T) {
+func TestPassingTestCannotSupersedeFailedBuild(t *testing.T) {
 	engine := newEngine(t, &scriptedProvider{}, tool.NewRegistry(nil, nil))
-	failedSmoke := qualityEvidenceResult(verify.StatusFailed, []string{"a.go"})
-	failedSmoke.IsError = true
-	failedSmoke.Outcome.Facts.Verification.Kind = "process_smoke"
-	failedSmoke.Outcome.Facts.Verification.CommandDigest = "sha256:smoke"
+	failedBuild := commandEvidenceResult(verify.StatusFailed, []string{"a.go"})
+	failedBuild.IsError = true
+	failedBuild.Outcome.Facts.Verification.Kind = "build"
+	failedBuild.Outcome.Facts.Verification.CommandDigest = "sha256:build"
 	engine.bindVerificationEvidence(provider.ToolCall{
-		ID: "smoke-failed", Name: "quality_process_smoke",
-	}, &failedSmoke, false, 1)
+		ID: "build-failed", Name: "exec_command",
+	}, &failedBuild, false, 1)
 
-	passedVerify := qualityEvidenceResult(verify.StatusPassed, []string{"a.go"})
+	passedVerify := commandEvidenceResult(verify.StatusPassed, []string{"a.go"})
 	passedVerify.Outcome.Facts.Verification.Kind = "verify"
 	passedVerify.Outcome.Facts.Verification.CommandDigest = "sha256:verify"
 	engine.bindVerificationEvidence(provider.ToolCall{
-		ID: "verify-passed", Name: "quality_verify",
+		ID: "verify-passed", Name: "exec_command",
 	}, &passedVerify, false, 1)
 
-	receipt, uncovered := engine.qualityVerificationReceipt([]string{"a.go"}, 1)
+	receipt, uncovered := engine.commandVerificationReceipt([]string{"a.go"}, 1)
 	if receipt.Status != verify.StatusFailed || receipt.Errors != 1 ||
 		len(uncovered) != 0 {
-		t.Fatalf("generic verify cleared process smoke failure: %+v, %v", receipt, uncovered)
+		t.Fatalf("generic verify cleared process build failure: %+v, %v", receipt, uncovered)
 	}
 
-	passedSmoke := qualityEvidenceResult(verify.StatusPassed, []string{"a.go"})
-	passedSmoke.Outcome.Facts.Verification.Kind = "process_smoke"
-	passedSmoke.Outcome.Facts.Verification.CommandDigest = "sha256:smoke-retry"
+	passedBuild := commandEvidenceResult(verify.StatusPassed, []string{"a.go"})
+	passedBuild.Outcome.Facts.Verification.Kind = "build"
+	passedBuild.Outcome.Facts.Verification.CommandDigest = "sha256:build-retry"
 	engine.bindVerificationEvidence(provider.ToolCall{
-		ID: "smoke-passed", Name: "quality_process_smoke",
-	}, &passedSmoke, false, 1)
+		ID: "build-passed", Name: "exec_command",
+	}, &passedBuild, false, 1)
 
-	receipt, uncovered = engine.qualityVerificationReceipt([]string{"a.go"}, 1)
+	receipt, uncovered = engine.commandVerificationReceipt([]string{"a.go"}, 1)
 	if receipt.Status != verify.StatusPassed || len(uncovered) != 0 {
-		t.Fatalf("passing process smoke did not clear prior failure: %+v, %v", receipt, uncovered)
+		t.Fatalf("passing process build did not clear prior failure: %+v, %v", receipt, uncovered)
 	}
 }
 
-func TestProcessSmokePassedDoesNotCoverChangedPaths(t *testing.T) {
+func TestRunningCommandDoesNotCoverChangedPaths(t *testing.T) {
 	engine := newEngine(t, &scriptedProvider{}, tool.NewRegistry(nil, nil))
-	passedSmoke := qualityEvidenceResult(verify.StatusPassed, []string{"a.go"})
-	passedSmoke.Outcome.Facts.Verification.Kind = "process_smoke"
+	passedBuild := commandEvidenceResult(verify.StatusRunning, []string{"a.go"})
+	passedBuild.Outcome.Facts.Verification.Kind = "build"
 	engine.bindVerificationEvidence(provider.ToolCall{
-		ID: "smoke-passed", Name: "quality_process_smoke",
-	}, &passedSmoke, false, 1)
+		ID: "build-passed", Name: "exec_command",
+	}, &passedBuild, false, 1)
 
-	receipt, uncovered := engine.qualityVerificationReceipt([]string{"a.go"}, 1)
+	receipt, uncovered := engine.commandVerificationReceipt([]string{"a.go"}, 1)
 	if receipt.Status != verify.StatusUnavailable ||
 		len(uncovered) != 1 || uncovered[0] != "a.go" {
-		t.Fatalf("process smoke covered quality paths: %+v, %v", receipt, uncovered)
+		t.Fatalf("process build covered verification paths: %+v, %v", receipt, uncovered)
 	}
 }
 
-func TestQualityEvidenceRejectsSameBatchMutationAndGenericShell(t *testing.T) {
+func TestCommandEvidenceRejectsSameBatchMutationAndGenericShell(t *testing.T) {
 	engine := newEngine(t, &scriptedProvider{}, tool.NewRegistry(nil, nil))
-	result := qualityEvidenceResult(verify.StatusPassed, []string{"a.go"})
+	result := commandEvidenceResult(verify.StatusPassed, []string{"a.go"})
 	engine.bindVerificationEvidence(provider.ToolCall{
-		ID: "verify-1", Name: "quality_verify",
+		ID: "verify-1", Name: "exec_command",
 	}, &result, true, 1)
 	if accepted, _ := result.Metadata["verification_evidence_accepted"].(bool); accepted {
 		t.Fatalf("same-batch evidence was accepted: %#v", result.Metadata)
 	}
-	shellResult := qualityEvidenceResult(verify.StatusPassed, []string{"a.go"})
+	shellResult := commandEvidenceResult(verify.StatusPassed, []string{"a.go"})
 	shellResult.Execution.VerificationEvidenceAuthorized = false
 	engine.bindVerificationEvidence(provider.ToolCall{
 		ID: "shell-1", Name: "exec_command",
 	}, &shellResult, false, 1)
-	receipt, uncovered := engine.qualityVerificationReceipt([]string{"a.go"}, 1)
+	receipt, uncovered := engine.commandVerificationReceipt([]string{"a.go"}, 1)
 	if receipt.Status != verify.StatusUnavailable || len(uncovered) != 1 {
 		t.Fatalf("generic shell produced evidence: %+v, %v", receipt, uncovered)
 	}
 }
 
-func TestVerifyGateAcceptsFullCurrentQualityCoverage(t *testing.T) {
+func TestVerifyGateAcceptsFullCurrentCommandCoverage(t *testing.T) {
 	engine := newEngine(t, &scriptedProvider{}, tool.NewRegistry(nil, nil))
 	scope := attachTestScope(t, engine)
 	engine.options.Verify = VerifyOptions{
@@ -227,9 +244,9 @@ func TestVerifyGateAcceptsFullCurrentQualityCoverage(t *testing.T) {
 		Runner: unavailableVerifier{}, MaxRepairSteps: 1,
 	}
 	scope.state.diff.Record(turnkernel.TurnDiffEntry{Path: "a.go", Kind: "modified"})
-	result := qualityEvidenceResult(verify.StatusPassed, []string{"a.go"})
+	result := commandEvidenceResult(verify.StatusPassed, []string{"a.go"})
 	engine.bindVerificationEvidence(provider.ToolCall{
-		ID: "verify-1", Name: "quality_verify",
+		ID: "verify-1", Name: "exec_command",
 	}, &result, false, 1)
 	kernel := newEngineTurnKernel(
 		protocol.TurnIntentAnswer, "act", nil, 0, nil, nil,
@@ -246,7 +263,7 @@ func TestVerifyGateAcceptsFullCurrentQualityCoverage(t *testing.T) {
 	}
 	if outcome.action != verifyActionPassed || outcome.receipt == nil ||
 		outcome.receipt.Status != verify.StatusPassed ||
-		outcome.receipt.Scope != verify.ScopeQuality {
+		outcome.receipt.Scope != verify.ScopeCommands {
 		t.Fatalf("outcome = %+v", outcome)
 	}
 }
@@ -255,7 +272,7 @@ func TestVerifyGateRequestsStructuredRepairForMissingCoverage(t *testing.T) {
 	engine := newEngine(t, &scriptedProvider{}, tool.NewRegistry(nil, nil))
 	scope := attachTestScope(t, engine)
 	engine.options.Verify = VerifyOptions{
-		Mode: VerifyModeSoft, Scope: verify.ScopeDiagnostics,
+		Mode: VerifyModeHard, Scope: verify.ScopeDiagnostics,
 		Runner: unavailableVerifier{}, MaxRepairSteps: 1,
 	}
 	scope.state.diff.Record(turnkernel.TurnDiffEntry{Path: "a.go", Kind: "modified"})
@@ -272,33 +289,33 @@ func TestVerifyGateRequestsStructuredRepairForMissingCoverage(t *testing.T) {
 		t.Fatal(err)
 	}
 	if outcome.action != verifyActionRepair || outcome.receipt == nil ||
-		!strings.Contains(outcome.receipt.Message, "uncovered_paths=a.go") {
+		len(outcome.receipt.UncoveredPaths) != 1 || outcome.receipt.UncoveredPaths[0] != "a.go" {
 		t.Fatalf("outcome = %+v", outcome)
 	}
 	feedback := verifyFeedback(outcome.receipt, 1)
-	if !strings.Contains(feedback.Text(), "required_action=quality_verify") {
+	if !strings.Contains(feedback.Text(), "required_action=exec_command") {
 		t.Fatalf("feedback = %q", feedback.Text())
 	}
 }
 
-func TestFailedQualityFeedbackRequiresPassingStructuredRetry(t *testing.T) {
+func TestFailedCommandFeedbackRequiresPassingStructuredRetry(t *testing.T) {
 	receipt := &VerificationReceipt{
 		Receipt: verify.Receipt{
-			Scope: verify.ScopeQuality, Status: verify.StatusFailed,
-			Message: "structured quality command failed",
+			UncoveredPaths: []string{"a.go"},
+			Scope:          verify.ScopeCommands, Status: verify.StatusFailed,
+			Message: "declared verification command failed",
 			Checks: []verify.Check{{
 				Name: "test", Command: "sha256:test",
 				Status: verify.StatusFailed, ExitCode: 1,
 			}},
 		},
-		UncoveredPaths: []string{"a.go"},
 	}
 	feedback := verifyFeedback(receipt, 1).Text()
 	for _, expected := range []string{
-		"required_action=repair_quality_verification",
+		"required_action=exec_command",
 		`uncovered_paths=["a.go"]`,
 		"network_targets",
-		"Do not call turn_complete",
+		"write_stdin",
 	} {
 		if !strings.Contains(feedback, expected) {
 			t.Fatalf("feedback %q does not contain %q", feedback, expected)
@@ -339,11 +356,7 @@ func TestStrictVerifyGateDoesNotReportFailedVerification(t *testing.T) {
 	if err := kernel.BeginVerification(); err != nil {
 		t.Fatal(err)
 	}
-	command := gate.verificationCommand(
-		turnkernel.VerificationFailed,
-		nil,
-		"broken",
-	)
+	command := gate.verificationCommand(verify.Receipt{Status: verify.StatusFailed, Message: "broken"})
 	action, err := kernel.FinishVerification(command)
 	if err != nil {
 		t.Fatal(err)
@@ -363,7 +376,7 @@ func TestStrictVerifyGateDoesNotReportFailedVerification(t *testing.T) {
 	}
 }
 
-func qualityEvidenceResult(status string, paths []string) tool.Result {
+func commandEvidenceResult(status string, paths []string) tool.Result {
 	return tool.Result{
 		Execution: &tool.ExecutionReceipt{
 			VerificationEvidenceAuthorized: true,

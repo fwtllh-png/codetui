@@ -248,16 +248,16 @@ type InputState struct {
 }
 
 type CompletionDecision struct {
-	Accepted       bool     `json:"accepted"`
-	Summary        string   `json:"summary,omitempty"`
-	Reason         string   `json:"reason,omitempty"`
-	RequiredAction string   `json:"required_action,omitempty"`
-	OutputMode     string   `json:"output_mode,omitempty"`
-	PendingActions []string `json:"pending_actions,omitempty"`
-	Mutation       uint64   `json:"mutation_revision"`
-	ChangedPaths   []string `json:"changed_paths,omitempty"`
-	QualityCalls   []string `json:"quality_call_ids,omitempty"`
-	CompletionCall string   `json:"completion_call_id,omitempty"`
+	Accepted          bool     `json:"accepted"`
+	Summary           string   `json:"summary,omitempty"`
+	Reason            string   `json:"reason,omitempty"`
+	RequiredAction    string   `json:"required_action,omitempty"`
+	OutputMode        string   `json:"output_mode,omitempty"`
+	PendingActions    []string `json:"pending_actions,omitempty"`
+	Mutation          uint64   `json:"mutation_revision"`
+	ChangedPaths      []string `json:"changed_paths,omitempty"`
+	VerificationCalls []string `json:"verification_call_ids,omitempty"`
+	CompletionCall    string   `json:"completion_call_id,omitempty"`
 }
 
 type VerificationState struct {
@@ -343,6 +343,7 @@ type State struct {
 	PendingInput          *InputState                 `json:"pending_input,omitempty"`
 	Changes               []ObservedChange            `json:"changes,omitempty"`
 	Completion            *CompletionDecision         `json:"completion,omitempty"`
+	Continuation          *ContinuationCursor         `json:"continuation,omitempty"`
 	Verification          VerificationState           `json:"verification"`
 	Journal               JournalStatus               `json:"journal"`
 	Usage                 UsageState                  `json:"usage"`
@@ -367,6 +368,16 @@ type State struct {
 	RecoveryToolSucceeded bool                        `json:"recovery_tool_succeeded,omitempty"`
 	PendingTerminal       *TerminalDecision           `json:"pending_terminal,omitempty"`
 	Terminal              *TerminalDecision           `json:"terminal,omitempty"`
+}
+
+// ContinuationCursor references the newest durable conversation snapshot
+// accepted for the running Turn. The conversation content lives in the
+// context CAS; the cursor itself commits as a kernel fact, so a restored
+// kernel can never claim conversation content that was never stored.
+type ContinuationCursor struct {
+	Sequence uint64 `json:"sequence"`
+	Handle   string `json:"handle"`
+	Digest   string `json:"digest"`
 }
 
 func NewState(intent protocol.TurnIntent, mode string, profileRevision uint64) State {

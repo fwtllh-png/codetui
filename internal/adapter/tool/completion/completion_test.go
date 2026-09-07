@@ -44,6 +44,51 @@ func TestCompletionToolDeclaresOneStepFinalOutputContract(t *testing.T) {
 	}
 }
 
+// One pending action is bounded prose: a bullet at the schema ceiling must
+// pass, because rejecting near-boundary declarations fails whole turns over
+// formatting while their work is complete.
+func TestCompletionToolAcceptsBoundaryLengthPendingAction(t *testing.T) {
+	registry := tool.NewRegistry(nil, nil)
+	if err := Register(registry); err != nil {
+		t.Fatal(err)
+	}
+	boundary := strings.Repeat("理", 512)
+	raw, err := json.Marshal(map[string]any{
+		"status":          "incomplete",
+		"summary":         "partial progress",
+		"pending_actions": []string{boundary},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := tooltest.Execute(t.Context(), registry, tool.Call{
+		Name: Name, Arguments: raw,
+	})
+	if err != nil {
+		t.Fatalf("boundary pending action rejected: %v", err)
+	}
+	declaration, ok := result.Metadata[tool.MetadataCompletionDeclaration].(tool.CompletionDeclaration)
+	if !ok || len(declaration.PendingActions) != 1 ||
+		len([]rune(declaration.PendingActions[0])) != 512 {
+		t.Fatalf("boundary declaration = %#v", result.Metadata)
+	}
+
+	over := strings.Repeat("x", 513)
+	raw, err = json.Marshal(map[string]any{
+		"status":          "incomplete",
+		"summary":         "partial progress",
+		"pending_actions": []string{over},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tooltest.Execute(t.Context(), registry, tool.Call{
+		Name: Name, Arguments: raw,
+	}); err == nil {
+		t.Fatal("over-limit pending action accepted")
+	}
+}
+
 func TestCompletionToolRequiresPendingActions(t *testing.T) {
 	registry := tool.NewRegistry(nil, nil)
 	if err := Register(registry); err != nil {

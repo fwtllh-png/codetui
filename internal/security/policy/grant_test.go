@@ -47,7 +47,7 @@ func TestShellGrantBindsCommandCWDAndWriteSet(t *testing.T) {
 
 func TestShellGrantBindsLoopbackResourceSemantics(t *testing.T) {
 	base := Invocation{
-		Tool: "quality_test", Capability: CapabilityProcess,
+		Tool: "exec_command", Capability: CapabilityProcess,
 		Access: tool.AccessWrite, Sandbox: tool.SandboxStrong, Validated: true,
 		Arguments: json.RawMessage(`{"command":"go test ./..."}`),
 		Resources: []tool.Resource{{
@@ -74,7 +74,7 @@ func TestShellGrantBindsLoopbackResourceSemantics(t *testing.T) {
 
 func TestProcessPathGrantBindsExecutableAndArguments(t *testing.T) {
 	base := Invocation{
-		Tool: "quality_process_smoke", Capability: CapabilityProcess,
+		Tool: "fixture_host_process", Capability: CapabilityProcess,
 		Access: tool.AccessRead, Sandbox: tool.SandboxNone, Validated: true,
 		Arguments: json.RawMessage(
 			`{"path":"target/App","args":["--smoke"]}`,

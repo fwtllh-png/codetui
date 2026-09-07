@@ -3,6 +3,7 @@ package verify
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/fwtllh-png/QCode/internal/adapter/provider"
@@ -35,13 +36,12 @@ func (o GateOptions) Enabled() bool {
 
 type GateReceipt struct {
 	Receipt
-	Mode           string     `json:"mode"`
-	Action         string     `json:"action"`
-	RepairSteps    int        `json:"repair_steps"`
-	Paths          []string   `json:"paths,omitempty"`
-	UncoveredPaths []string   `json:"uncovered_paths,omitempty"`
-	Attempts       []Receipt  `json:"attempts,omitempty"`
-	Workspace      *Workspace `json:"workspace,omitempty"`
+	Mode        string     `json:"mode"`
+	Action      string     `json:"action"`
+	RepairSteps int        `json:"repair_steps"`
+	Paths       []string   `json:"paths,omitempty"`
+	Attempts    []Receipt  `json:"attempts,omitempty"`
+	Workspace   *Workspace `json:"workspace,omitempty"`
 }
 
 type Workspace struct {
@@ -74,20 +74,22 @@ func WorkspaceFromJournal(receipt workspacejournal.Receipt) *Workspace {
 }
 
 func FeedbackMessage(receipt *GateReceipt, turn uint64) provider.Message {
-	if receipt != nil && receipt.Scope == ScopeQuality &&
+	if receipt != nil && receipt.Scope == ScopeCommands &&
 		receipt.Status == StatusFailed {
-		paths, _ := json.Marshal(receipt.UncoveredPaths)
+		retryPaths := receipt.UncoveredPaths
+		if len(retryPaths) == 0 {
+			retryPaths = receipt.Paths
+		}
+		paths, _ := json.Marshal(retryPaths)
 		message := provider.TextMessage(
 			provider.RoleUser,
-			"[verify] a structured quality command failed and provides no coverage.\n"+
-				"required_action=repair_quality_verification\n"+
-				"retry_original=false\n"+
+			"[verify] a declared verification command failed and provides no coverage.\n"+
+				"required_action=exec_command\n"+
 				"uncovered_paths="+string(paths)+"\n"+
 				receipt.Feedback(feedbackLimit)+"\n"+
-				"Fix the command or code, then rerun quality_test or quality_verify "+
-				"with these exact covered_paths. If dependency downloads are required, "+
-				"declare their exact network_targets on the quality tool. Do not call "+
-				"turn_complete until a structured quality command passes.",
+				"Fix the command or code, then use exec_command with verification "+
+				"and these exact covered_paths. Declare dependency downloads in "+
+				"network_targets; collect the final exit via write_stdin when needed.",
 		)
 		message.Turn = turn
 		return message
@@ -96,12 +98,13 @@ func FeedbackMessage(receipt *GateReceipt, turn uint64) provider.Message {
 		paths, _ := json.Marshal(receipt.UncoveredPaths)
 		message := provider.TextMessage(
 			provider.RoleUser,
-			"[verify] structured verification is required before workspace_change completion.\n"+
-				"required_action=quality_verify\n"+
-				"retry_original=false\n"+
+			"[verify] the configured verification policy requires current execution evidence.\n"+
+				"required_action=exec_command\n"+
 				"uncovered_paths="+string(paths)+"\n"+
-				"Call quality_verify or quality_test after the last mutation with covered_paths "+
-				"set to these exact uncovered_paths. Then call turn_complete again. "+
+				"Use exec_command with verification and covered_paths set to these exact "+
+				"uncovered_paths. Collect the final exit via write_stdin when needed. "+
+				receipt.Feedback(feedbackLimit)+"\n"+
+				"Then call turn_complete again. "+
 				"Do not enumerate the whole worktree and do not retry the original edit.",
 		)
 		message.Turn = turn
@@ -121,6 +124,9 @@ func (r *GateReceipt) ProblemMessage() string {
 		return "verification failed"
 	}
 	message := fmt.Sprintf("verification (%s) failed", r.Scope)
+	if len(r.UncoveredPaths) != 0 {
+		message += "; uncovered_paths=" + strings.Join(r.UncoveredPaths, ",")
+	}
 	if r.Message != "" {
 		return message + ": " + r.Message
 	}

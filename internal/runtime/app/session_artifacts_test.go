@@ -1007,7 +1007,7 @@ func TestTurnRecoveryCreatesANewPromptWithoutReplayingOperations(t *testing.T) {
 		!strings.HasPrefix(continued.Prompt, "Run focused tests") ||
 		!strings.Contains(continued.Prompt, `<source_request turn="turn-source"/>`) ||
 		!strings.Contains(continued.Prompt, "<recovery_evidence>") ||
-		!strings.Contains(continued.Prompt, `"version":2`) ||
+		!strings.Contains(continued.Prompt, `"version":3`) ||
 		!strings.Contains(continued.Prompt, `"intent":"workspace_change"`) ||
 		!strings.Contains(continued.Prompt, `"known_reads":["parser.go"]`) ||
 		!strings.Contains(continued.Prompt, `"outcomes"`) ||
@@ -1457,6 +1457,7 @@ func TestRecoveryEvidenceIsCanonicalAndBounded(t *testing.T) {
 				Status: "unchanged",
 			},
 		},
+		"partial conclusion",
 	)
 	if rendered == "" || len(rendered) > artifact.TurnRecoveryEvidenceLimit {
 		t.Fatalf("rendered recovery evidence bytes = %d", len(rendered))
@@ -1465,7 +1466,7 @@ func TestRecoveryEvidenceIsCanonicalAndBounded(t *testing.T) {
 	if err := json.Unmarshal([]byte(rendered), &capsule); err != nil {
 		t.Fatal(err)
 	}
-	if capsule.Version != 2 ||
+	if capsule.Version != 3 ||
 		capsule.Intent != protocol.TurnIntentWorkspaceChange ||
 		capsule.SourceTurnID != "turn-source" ||
 		capsule.OmittedTools == 0 ||
@@ -1474,7 +1475,8 @@ func TestRecoveryEvidenceIsCanonicalAndBounded(t *testing.T) {
 		len(capsule.WorkItem.KnownReads) != 2 ||
 		len(capsule.Outcomes) == 0 ||
 		capsule.Receipt == nil ||
-		len(capsule.Receipt.ReadPaths) != 2 {
+		len(capsule.Receipt.ReadPaths) != 2 ||
+		capsule.PartialOutput != "partial conclusion" {
 		t.Fatalf("recovery evidence = %+v", capsule)
 	}
 }

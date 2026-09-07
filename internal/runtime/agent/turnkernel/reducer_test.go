@@ -439,16 +439,6 @@ func TestReducerOwnsCompletionAcceptanceAndRuntimeBindings(t *testing.T) {
 			reason: "same_batch_mutation",
 		},
 		{
-			name:  "quality evidence required",
-			state: mutated,
-			candidate: func() CompletionCandidate {
-				value := base
-				value.QualityRequired = true
-				return value
-			}(),
-			reason: "quality_verification_required",
-		},
-		{
 			name:      "read only answer",
 			state:     startSampling(t, protocol.TurnIntentAnswer),
 			candidate: base,

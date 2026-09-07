@@ -1,20 +1,19 @@
-// Package verify runs post-change verification for a workspace and reports a
-// receipt the turn gate and the quality tools can both consume.
+// Package verify reduces execution and diagnostic evidence into receipts.
 package verify
 
 import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
-	"sync"
 
 	"github.com/fwtllh-png/QCode/internal/observability/diagnostics"
-	"github.com/fwtllh-png/QCode/internal/platform/process"
 	"github.com/fwtllh-png/QCode/internal/security/sandbox"
 )
 
@@ -25,15 +24,13 @@ const (
 	// ScopeDiagnostics reuses the post-edit diagnostics already collected for
 	// the files a turn touched, so it costs no extra process.
 	ScopeDiagnostics Scope = "diagnostics"
-	// ScopeRepository runs the repository's own verification commands.
+	// ScopeRepository requires recorded repository verification commands.
 	ScopeRepository Scope = "repository"
-	// ScopeAffected runs only the tests that cover the files a turn changed. It
-	// needs a mapping from source paths to tests, and reports itself unavailable
-	// for the languages that mapping does not know rather than passing silently.
+	// ScopeAffected requires recorded verification covering changed files.
 	ScopeAffected Scope = "affected"
-	// ScopeQuality is a model-invoked quality command whose exact covered paths
+	// ScopeCommands is a model-invoked verification command whose exact covered paths
 	// the engine bound to the current workspace mutation revision.
-	ScopeQuality Scope = "quality"
+	ScopeCommands Scope = "commands"
 )
 
 const (
@@ -41,12 +38,11 @@ const (
 	StatusFailed       = "failed"
 	StatusUnavailable  = "unavailable"
 	StatusNotEvaluated = "not_evaluated"
-
-	ErrorCategoryDependencyUnavailable = "dependency_unavailable"
 )
 
 // Check is one verification command and, once run, its outcome.
 type Check struct {
+	CallID            string `json:"call_id,omitempty"`
 	Name              string `json:"name"`
 	Command           string `json:"command"`
 	Reason            string `json:"reason"`
@@ -58,17 +54,17 @@ type Check struct {
 	InputDigest       string `json:"input_digest,omitempty"`
 	WorkspaceRevision uint64 `json:"workspace_revision,omitempty"`
 	MutationRevision  uint64 `json:"mutation_revision,omitempty"`
-	Reused            bool   `json:"reused,omitempty"`
 }
 
 // Receipt is the verdict of one verification pass.
 type Receipt struct {
-	Scope    Scope   `json:"scope"`
-	Status   string  `json:"status"`
-	Checks   []Check `json:"checks,omitempty"`
-	Errors   int     `json:"errors,omitempty"`
-	Warnings int     `json:"warnings,omitempty"`
-	Message  string  `json:"message,omitempty"`
+	UncoveredPaths []string `json:"uncovered_paths,omitempty"`
+	Scope          Scope    `json:"scope"`
+	Status         string   `json:"status"`
+	Checks         []Check  `json:"checks,omitempty"`
+	Errors         int      `json:"errors,omitempty"`
+	Warnings       int      `json:"warnings,omitempty"`
+	Message        string   `json:"message,omitempty"`
 }
 
 // Failed reports whether the pass produced a verdict the gate must act on.
@@ -110,6 +106,7 @@ type Request struct {
 	Diagnostics       []diagnostics.Receipt
 	WorkspaceRevision uint64
 	MutationRevision  uint64
+	Evidence          []Evidence
 }
 
 // Runner performs one verification pass.
@@ -117,274 +114,17 @@ type Runner interface {
 	Verify(context.Context, Request) (Receipt, error)
 }
 
-// Command is a verification command discovered for a workspace.
-type Command struct {
-	Name    string
-	Command string
-	Reason  string
-}
-
-// Detect returns the verification commands for root, inferred from the build
-// files present. The fallback keeps a single well-known entry point so an
-// unrecognised workspace still reports something actionable.
-func Detect(root string) []Command {
-	var commands []Command
-	if exists(filepath.Join(root, "go.mod")) {
-		commands = append(commands, Command{
-			Name: "go", Command: "go test ./...",
-			Reason: "go.mod declares a Go module; run its repository test graph",
-		})
-	}
-	if exists(filepath.Join(root, "Cargo.toml")) {
-		commands = append(commands, Command{
-			Name: "rust", Command: "cargo test --workspace",
-			Reason: "Cargo.toml declares a Rust workspace or crate",
-		})
-	}
-	if exists(filepath.Join(root, "package.json")) {
-		commands = append(commands, Command{
-			Name: "node", Command: nodeCommand(root),
-			Reason: "package.json declares a JavaScript/TypeScript test script",
-		})
-	}
-	if exists(filepath.Join(root, "pyproject.toml")) ||
-		exists(filepath.Join(root, "setup.cfg")) ||
-		exists(filepath.Join(root, "pytest.ini")) ||
-		exists(filepath.Join(root, "requirements.txt")) {
-		commands = append(commands, Command{
-			Name: "python", Command: "python3 -m pytest",
-			Reason: "Python project metadata declares a pytest-compatible repository",
-		})
-	}
-	if exists(filepath.Join(root, "CMakeLists.txt")) {
-		commands = append(commands, Command{
-			Name: "cmake",
-			Command: `cmake -S . -B "$TMPDIR/qcode-cmake-build" && ` +
-				`cmake --build "$TMPDIR/qcode-cmake-build" && ` +
-				`ctest --test-dir "$TMPDIR/qcode-cmake-build" --output-on-failure`,
-			Reason: "CMakeLists.txt declares a CMake project; configure, build, and run CTest in private temporary storage",
-		})
-	}
-	if exists(filepath.Join(root, "WORKSPACE")) ||
-		exists(filepath.Join(root, "WORKSPACE.bazel")) ||
-		exists(filepath.Join(root, "MODULE.bazel")) {
-		commands = append(commands, Command{
-			Name: "bazel", Command: "bazel test //...",
-			Reason: "Bazel workspace metadata declares a repository test graph",
-		})
-	}
-	if exists(filepath.Join(root, "pom.xml")) {
-		commands = append(commands, Command{
-			Name: "maven", Command: "mvn test",
-			Reason: "pom.xml declares a Maven project",
-		})
-	}
-	if exists(filepath.Join(root, "gradlew")) {
-		commands = append(commands, Command{
-			Name: "gradle", Command: "./gradlew test",
-			Reason: "the Gradle wrapper declares a reproducible project test entry point",
-		})
-	} else if exists(filepath.Join(root, "build.gradle")) ||
-		exists(filepath.Join(root, "build.gradle.kts")) ||
-		exists(filepath.Join(root, "settings.gradle")) ||
-		exists(filepath.Join(root, "settings.gradle.kts")) {
-		commands = append(commands, Command{
-			Name: "gradle", Command: "gradle test",
-			Reason: "Gradle build metadata declares a project test entry point",
-		})
-	}
-	if len(commands) == 0 {
-		commands = append(commands, Command{
-			Name: "workspace", Command: "make verify",
-			Reason: "no supported language manifest was found; use the repository verification entry point",
-		})
-	}
-	return commands
-}
-
-func nodeCommand(root string) string {
-	switch {
-	case exists(filepath.Join(root, "pnpm-lock.yaml")):
-		return "pnpm test"
-	case exists(filepath.Join(root, "yarn.lock")):
-		return "yarn test"
-	default:
-		return "npm test"
-	}
-}
-
-func exists(path string) bool {
-	_, err := os.Stat(path)
-	return err == nil
-}
-
-// TestMapper reports which test files cover the given workspace-relative source
-// paths. A source path absent from the result has no convention the mapper
-// knows, which is different from a path that maps to no tests.
-type TestMapper interface {
-	RelatedTests(context.Context, []string) (map[string][]string, error)
-}
-
-// CommandRunner verifies a workspace by running shell commands under the
-// sandbox, or by summarising post-edit diagnostics when the scope asks for it.
-type CommandRunner struct {
-	Root     string
-	Sandbox  sandbox.Backend
-	Commands []Command
-	// Tests maps changed paths to the tests that cover them. ScopeAffected needs
-	// it; the other scopes ignore it.
-	Tests TestMapper
-	// Run is a seam for tests; nil means run the real process.
-	Run   func(context.Context, process.Options) (process.Result, error)
-	mu    sync.Mutex
-	cache map[string]Check
-}
-
-func (r *CommandRunner) Verify(ctx context.Context, request Request) (Receipt, error) {
-	if r == nil {
-		return Receipt{
-			Scope: request.Scope, Status: StatusUnavailable, Message: "no verify runner",
-		}, nil
-	}
-	switch request.Scope {
-	case ScopeDiagnostics:
-		return FromDiagnostics(request.Diagnostics, request.Paths), nil
-	case ScopeRepository:
-		commands := r.Commands
-		if len(commands) == 0 {
-			commands = Detect(r.Root)
-		}
-		return r.runCommands(ctx, request, commands)
-	case ScopeAffected:
-		return r.runAffected(ctx, request)
-	default:
-		return Receipt{}, fmt.Errorf("unknown verify scope %q", request.Scope)
-	}
-}
-
-// runAffected verifies only what the change can reach. It refuses to answer for
-// paths it cannot map instead of reporting a pass no test backed: an empty run
-// that reads as green is worse than an honest "unavailable".
-func (r *CommandRunner) runAffected(ctx context.Context, request Request) (Receipt, error) {
-	paths := relativePaths(r.Root, request.Paths)
-	if len(paths) == 0 {
-		return Receipt{
-			Scope: ScopeAffected, Status: StatusUnavailable,
-			Message: "no changed paths to map to tests",
-		}, nil
-	}
-	// A configured command overrides the mapping: the operator knows their suite,
-	// and the placeholders let them narrow it to the change.
-	if len(r.Commands) != 0 {
-		request.Paths = paths
-		return r.runCommands(ctx, request, expandCommands(r.Commands, paths))
-	}
-	related := map[string][]string{}
-	if r.Tests != nil {
-		found, err := r.Tests.RelatedTests(ctx, paths)
-		if err != nil {
-			return Receipt{
-				Scope: ScopeAffected, Status: StatusUnavailable,
-				Message: "the test mapping is unavailable: " + err.Error(),
-			}, nil
-		}
-		related = found
-	}
-	commands, unmapped := AffectedCommands(r.Root, paths, related)
-	if len(commands) == 0 {
-		return Receipt{
-			Scope: ScopeAffected, Status: StatusUnavailable,
-			Message: "no affected tests could be derived for " + strings.Join(unmapped, ", ") +
-				"; set execution.verify.command with {paths} or {packages}, or use the repository scope",
-		}, nil
-	}
-	request.Paths = paths
-	receipt, err := r.runCommands(ctx, request, commands)
-	if err != nil {
-		return Receipt{}, err
-	}
-	if len(unmapped) != 0 {
-		receipt.Message = "no affected tests known for " + strings.Join(unmapped, ", ")
-	}
-	return receipt, nil
-}
-
-func (r *CommandRunner) runCommands(
-	ctx context.Context, request Request, commands []Command,
-) (Receipt, error) {
-	receipt := Receipt{Scope: request.Scope, Status: StatusPassed}
-	inputDigest := r.inputDigest(request.Paths)
-	for _, command := range commands {
-		cacheKey := fmt.Sprintf(
-			"%s\x00%s\x00%d\x00%d",
-			command.Command, inputDigest,
-			request.WorkspaceRevision, request.MutationRevision,
-		)
-		if inputDigest != "" {
-			r.mu.Lock()
-			cached, ok := r.cache[cacheKey]
-			r.mu.Unlock()
-			if ok && cached.Status == StatusPassed {
-				cached.Reused = true
-				cached.WorkspaceRevision = request.WorkspaceRevision
-				cached.MutationRevision = request.MutationRevision
-				receipt.Checks = append(receipt.Checks, cached)
-				continue
-			}
-		}
-		result, err := r.runProcess(ctx, command.Command)
-		if err != nil {
-			return Receipt{}, fmt.Errorf("verify %s: %w", command.Name, err)
-		}
-		status, reason := CommandResultStatus(command.Command, result)
-		derivation := command.Reason
-		if derivation == "" {
-			derivation = "the verification command was explicitly configured by the repository or operator"
-		}
-		check := Check{
-			Name: command.Name, Command: command.Command, Reason: derivation, Status: status,
-			ExitCode: result.ExitCode, Stdout: result.Stdout, Stderr: result.Stderr,
-			InputDigest:       inputDigest,
-			WorkspaceRevision: request.WorkspaceRevision,
-			MutationRevision:  request.MutationRevision,
-		}
-		switch status {
-		case StatusFailed:
-			check.Category = "test_failure"
-			receipt.Status = StatusFailed
-			receipt.Errors++
-		case StatusUnavailable:
-			check.Category = ErrorCategoryDependencyUnavailable
-			if receipt.Status == StatusPassed {
-				receipt.Status = StatusUnavailable
-			}
-			if receipt.Message == "" {
-				receipt.Message = reason
-			}
-		}
-		receipt.Checks = append(receipt.Checks, check)
-		if inputDigest != "" && status == StatusPassed {
-			r.mu.Lock()
-			if r.cache == nil {
-				r.cache = make(map[string]Check)
-			}
-			r.cache[cacheKey] = check
-			r.mu.Unlock()
-		}
-	}
-	return receipt, nil
-}
-
-func (r *CommandRunner) inputDigest(paths []string) string {
-	digest, _ := InputDigest(r.Root, paths)
-	return digest
-}
-
 // InputDigest binds a verification node to the exact bytes of its declared
 // workspace inputs. An empty path set deliberately disables reuse because the
 // runtime cannot prove which workspace content the command consumed.
 func InputDigest(root string, paths []string) (string, error) {
-	paths = relativePaths(root, paths)
+	normalized := relativePaths(root, paths)
+	for _, path := range normalized {
+		if _, valid := CanonicalEvidencePath(path); !valid {
+			return "", fmt.Errorf("verification path is outside the workspace: %q", path)
+		}
+	}
+	paths = normalized
 	if len(paths) == 0 {
 		return "", nil
 	}
@@ -395,52 +135,24 @@ func InputDigest(root string, paths []string) (string, error) {
 		return "", err
 	}
 	for _, path := range paths {
-		full, err := workspace.Resolve(path, sandbox.MustExist)
-		if err != nil {
-			return "", err
-		}
-		data, err := os.ReadFile(full)
-		if err != nil {
-			return "", err
-		}
 		hash.Write([]byte(path))
 		hash.Write([]byte{0})
-		hash.Write(data)
+		file, err := workspace.OpenFile(path)
+		if errors.Is(err, os.ErrNotExist) {
+			hash.Write([]byte("missing"))
+		} else if err != nil {
+			return "", err
+		} else {
+			hash.Write([]byte("file\x00"))
+			_, copyErr := io.Copy(hash, file)
+			closeErr := file.Close()
+			if copyErr != nil || closeErr != nil {
+				return "", errors.Join(copyErr, closeErr)
+			}
+		}
 		hash.Write([]byte{0})
 	}
 	return "sha256:" + hex.EncodeToString(hash.Sum(nil)), nil
-}
-
-func CommandResultStatus(_ string, result process.Result) (status, reason string) {
-	if result.ExitCode == 0 {
-		return StatusPassed, ""
-	}
-	return StatusFailed, ""
-}
-
-func (r *CommandRunner) runProcess(ctx context.Context, command string) (process.Result, error) {
-	// The sandbox policy stores the workspace root with symlinks resolved, so
-	// running from the caller's spelling of the path (a macOS /var temp
-	// directory, say) is rejected as outside the workspace.
-	workspace, err := sandbox.NewWorkspace(r.Root)
-	if err != nil {
-		return process.Result{}, err
-	}
-	root := workspace.Root()
-	options := process.Options{
-		Command: command, Dir: root, Sandbox: r.Sandbox,
-		RequireSandbox: true, WorkspaceReadOnly: true,
-	}
-	if r.Run != nil {
-		return r.Run(ctx, options)
-	}
-	directory, err := process.OpenPinnedDirectory(r.Sandbox, root)
-	if err != nil {
-		return process.Result{}, err
-	}
-	defer directory.Close()
-	options.DirFile = directory
-	return process.Run(ctx, options)
 }
 
 // FromDiagnostics turns the post-edit diagnostics of a turn into a verdict.
@@ -451,6 +163,7 @@ func (r *CommandRunner) runProcess(ctx context.Context, command string) (process
 func FromDiagnostics(receipts []diagnostics.Receipt, paths []string) Receipt {
 	receipt := Receipt{Scope: ScopeDiagnostics, Status: StatusPassed}
 	evaluated := 0
+	covered := make(map[string]bool)
 	for _, item := range receipts {
 		if len(paths) > 0 && !containsPath(paths, item.Path) {
 			continue
@@ -468,8 +181,12 @@ func FromDiagnostics(receipts []diagnostics.Receipt, paths []string) Receipt {
 				Category: "diagnostic_failure", Status: StatusFailed, Stderr: item.Message,
 			})
 			continue
+		case "completed":
+		default:
+			continue
 		}
 		evaluated++
+		covered[item.Path] = true
 		var messages []string
 		errors := 0
 		for _, diagnostic := range item.Diagnostics {
@@ -493,9 +210,18 @@ func FromDiagnostics(receipts []diagnostics.Receipt, paths []string) Receipt {
 			Status:   StatusFailed, Stderr: strings.Join(messages, "\n"),
 		})
 	}
-	if evaluated == 0 {
+	for _, path := range paths {
+		matched := false
+		for candidate := range covered {
+			matched = matched || samePath(path, candidate)
+		}
+		if !matched {
+			receipt.UncoveredPaths = append(receipt.UncoveredPaths, path)
+		}
+	}
+	if receipt.Status != StatusFailed && (evaluated == 0 || len(receipt.UncoveredPaths) != 0) {
 		receipt.Status = StatusUnavailable
-		receipt.Message = "no post-edit diagnostics covered the changed files"
+		receipt.Message = "post-edit diagnostics do not cover every changed file"
 	}
 	return receipt
 }
@@ -547,5 +273,8 @@ func (r UnavailableRunner) Verify(_ context.Context, request Request) (Receipt, 
 	if message == "" {
 		message = "verification runner is not configured"
 	}
-	return Receipt{Scope: request.Scope, Status: StatusUnavailable, Message: message}, nil
+	return Receipt{
+		Scope: request.Scope, Status: StatusUnavailable, Message: message,
+		UncoveredPaths: append([]string(nil), request.Paths...),
+	}, nil
 }

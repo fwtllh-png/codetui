@@ -55,7 +55,11 @@ func TestSessionDeltaRestoresRecoveryHistoryIdentity(t *testing.T) {
 	history := []provider.Message{
 		messageWithText(provider.RoleUser, "earlier", 1),
 		messageWithText(provider.RoleAssistant, "done", 1),
-		messageWithText(provider.RoleUser, "recovery envelope", 2),
+		messageWithText(
+			provider.RoleUser,
+			recoveryEnvelopeText("continue the work", "origin"),
+			2,
+		),
 		messageWithText(provider.RoleAssistant, "partial", 2),
 	}
 	delta, err := prepareSessionDeltaForTest(
@@ -89,9 +93,10 @@ func TestSessionDeltaRestoresRecoveryHistoryIdentity(t *testing.T) {
 		Action:       protocol.TurnRecoveryContinue,
 		SourceTurnID: "recovery-1",
 	})
-	if len(base) != 2 ||
+	if len(base) != 3 ||
 		base[0].Text() != "earlier" ||
-		base[1].Text() != "done" {
+		base[1].Text() != "done" ||
+		base[2].Text() != "partial" {
 		t.Fatalf("restored recovery base = %+v", base)
 	}
 }

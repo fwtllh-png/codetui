@@ -363,6 +363,10 @@ func (e *Engine) modelStep(
 				return nil, nil, totalUsage, lastEstimate, err
 			}
 		}
+		sampleLease, holdErr := e.holdProviderSample(ctx)
+		if holdErr != nil {
+			return nil, nil, totalUsage, lastEstimate, holdErr
+		}
 		providerAttempt++
 		attemptStarted := time.Now()
 		if err := send(CallingModel, Event{
@@ -374,6 +378,7 @@ func (e *Engine) modelStep(
 				StartedAt:            attemptStarted,
 			},
 		}); err != nil {
+			sampleLease.Release()
 			return nil, nil, totalUsage, lastEstimate, err
 		}
 		var lastPublishedUsage *provider.Usage
@@ -381,10 +386,6 @@ func (e *Engine) modelStep(
 			index: e.nextSample(), provider: route.ProviderID(),
 			model: route.Model().ID, pricing: route.Model().Pricing, context: &attribution,
 			observe: e.observeTokenWindow,
-		}
-		sampleLease, holdErr := e.holdProviderSample(ctx)
-		if holdErr != nil {
-			return nil, nil, totalUsage, lastEstimate, holdErr
 		}
 		transport, err := providerassembly.RunTransportAttempt(
 			ctx,
@@ -489,6 +490,15 @@ func (e *Engine) modelStep(
 			},
 		)
 		if err != nil && !transport.Opened {
+			if sendErr := send(CallingModel, Event{ModelExecution: &ModelExecution{
+				Kind: "provider_attempt", SampleID: sampleID, Attempt: providerAttempt,
+				Status:               protocol.ProviderAttemptFailed,
+				ProjectedInputTokens: windowProjection.FullActiveTokens,
+				StartedAt:            attemptStarted, FinishedAt: time.Now(),
+			}}); sendErr != nil {
+				sampleLease.Release()
+				return nil, nil, totalUsage, lastEstimate, sendErr
+			}
 			if errors.Is(err, context.Canceled) && ctx.Err() == nil && e.appendSteering(history) {
 				sampleLease.Release()
 				attempt = -1

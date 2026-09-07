@@ -201,15 +201,17 @@ type FailureFact struct {
 }
 
 type ProcessSessionFact struct {
-	SessionID    string `json:"session_id,omitempty"`
-	Cursor       uint64 `json:"cursor"`
-	Running      bool   `json:"running"`
-	ExitCode     int    `json:"exit_code"`
-	TimedOut     bool   `json:"timed_out"`
-	TTY          bool   `json:"tty"`
-	Archived     bool   `json:"archived,omitempty"`
-	PendingBytes int    `json:"pending_bytes,omitempty"`
-	OmittedBytes int    `json:"omitted_bytes,omitempty"`
+	SessionID       string `json:"session_id,omitempty"`
+	SourceSessionID string `json:"source_session_id,omitempty"`
+	Terminated      bool   `json:"terminated,omitempty"`
+	Cursor          uint64 `json:"cursor"`
+	Running         bool   `json:"running"`
+	ExitCode        int    `json:"exit_code"`
+	TimedOut        bool   `json:"timed_out"`
+	TTY             bool   `json:"tty"`
+	Archived        bool   `json:"archived,omitempty"`
+	PendingBytes    int    `json:"pending_bytes,omitempty"`
+	OmittedBytes    int    `json:"omitted_bytes,omitempty"`
 }
 
 func OutcomeFromResult(result Result) Outcome {

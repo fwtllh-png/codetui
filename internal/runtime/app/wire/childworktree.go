@@ -487,10 +487,7 @@ func (c *childToolsets) open(
 		_ = sandbox.CloseBackend(backend)
 		return nil, err
 	}
-	runner := &verify.CommandRunner{Root: root, Sandbox: backend}
-	if c.verify.Command != "" {
-		runner.Commands = []verify.Command{{Name: "custom", Command: c.verify.Command}}
-	}
+	runner := &verify.ReceiptRunner{Root: root, Command: c.verify.Command}
 	files, err := filetool.NewWithBackend(root, backend)
 	if err != nil {
 		_ = journal.Close(context.Background())

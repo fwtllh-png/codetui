@@ -327,7 +327,7 @@ func TestCompatibleHTTPFailureTreatsAmbiguousQuota429AsRateLimit(t *testing.T) {
 	}
 }
 
-func TestCompatibleHTTPFailureRetriesInsufficientQuota429(t *testing.T) {
+func TestCompatibleHTTPFailureRecognizesInsufficientQuota429(t *testing.T) {
 	adapter := compatibleAdapter(t)
 	err := adapter.ClassifyHTTP(providerwire.HTTPFailure{
 		Status: http.StatusTooManyRequests,
@@ -336,7 +336,7 @@ func TestCompatibleHTTPFailureRetriesInsufficientQuota429(t *testing.T) {
 	})
 	var failure *provider.Failure
 	if !errors.As(err, &failure) ||
-		failure.Code != provider.FailureRateLimit {
+		failure.Code != provider.FailureQuota {
 		t.Fatalf("failure = %+v", failure)
 	}
 }

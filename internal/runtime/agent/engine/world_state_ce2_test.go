@@ -41,7 +41,7 @@ func TestWorldStatePersistsAcrossTurnsAndEmitsOnlyChanges(t *testing.T) {
 		t.Fatal(err)
 	}
 	third := runtime.requests[2].Messages
-	if countWorldSection(third, "working_set_ledger") != 2 ||
+	if countWorldSection(third, "working_set_ledger") != 1 ||
 		countWorldSection(third, promptcontext.PartitionSessionState) != 1 ||
 		countWorldMode(third, "patch") != 2 ||
 		engine.context.World().Revision != 2 {
@@ -86,7 +86,7 @@ func TestWorldStateFreezesWithinTurnAndRefreshesAtNextTurn(t *testing.T) {
 	if len(repository.evidence) != 2 {
 		t.Fatalf("World State builds = %d, want one for each Turn", len(repository.evidence))
 	}
-	if countWorldSection(runtime.requests[2].Messages, "working_set_ledger") != 2 ||
+	if countWorldSection(runtime.requests[2].Messages, "working_set_ledger") != 1 ||
 		countWorldSection(runtime.requests[2].Messages, promptcontext.PartitionSessionState) != 1 ||
 		countWorldMode(runtime.requests[2].Messages, "patch") != 2 {
 		t.Fatalf("next Turn did not publish deferred World changes: %+v",
@@ -94,7 +94,7 @@ func TestWorldStateFreezesWithinTurnAndRefreshesAtNextTurn(t *testing.T) {
 	}
 }
 
-func TestWorldStateRefreshesWhenEvidenceChangesWithinTurn(t *testing.T) {
+func TestWorldStateDefersEvidenceChangesWithinTurn(t *testing.T) {
 	runtime := &scriptedProvider{streams: []provider.Stream{
 		toolCallStream("echo-1", "echo", `{"text":"same"}`),
 		toolCallStream("echo-2", "echo", `{"text":"same"}`),
@@ -108,18 +108,19 @@ func TestWorldStateRefreshesWhenEvidenceChangesWithinTurn(t *testing.T) {
 	repository := &stubRepoContext{}
 	engine.options.RepoContext = repository
 
-	if _, err := engine.Run(t.Context(), "repeat one call", nil); err != nil {
+	reminded := false
+	if _, err := engine.Run(t.Context(), "repeat one call", func(Event) error {
+		for _, reminder := range engine.evidenceSet().Snapshot(100).Reminders {
+			reminded = reminded || strings.Contains(reminder.Detail, "echo ran 2 times")
+		}
+		return nil
+	}); err != nil {
 		t.Fatal(err)
 	}
 	if len(runtime.requests) != 3 {
 		t.Fatalf("requests = %d, want 3", len(runtime.requests))
 	}
-	if len(repository.evidence) != 2 ||
-		len(repository.evidence[1].Reminders) != 1 ||
-		!strings.Contains(
-			repository.evidence[1].Reminders[0].Detail,
-			"echo ran 2 times this turn with identical arguments",
-		) {
+	if len(repository.evidence) != 1 || !reminded {
 		t.Fatalf("projected evidence = %+v", repository.evidence)
 	}
 }
@@ -231,7 +232,7 @@ func TestPolicyAndSkillsChangesProduceTypedPatches(t *testing.T) {
 		t.Fatal(err)
 	}
 	second := runtime.requests[1].Messages
-	if countWorldSection(second, "policy") != 2 ||
+	if countWorldSection(second, "policy") != 1 ||
 		countWorldSection(second, "skills") != 1 ||
 		countWorldMode(second, "patch") != 1 {
 		t.Fatalf("policy patch request=%+v", second)
@@ -245,7 +246,7 @@ func TestPolicyAndSkillsChangesProduceTypedPatches(t *testing.T) {
 		t.Fatal(err)
 	}
 	third := runtime.requests[2].Messages
-	if countWorldSection(third, "skills") != 2 ||
+	if countWorldSection(third, "skills") != 1 ||
 		countWorldSection(third, promptcontext.PartitionSessionState) != 1 ||
 		countWorldMode(third, "patch") != 3 {
 		t.Fatalf("skills patch request=%+v", third)
@@ -274,7 +275,7 @@ func TestToolCatalogChangeProducesTypedPatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	request := runtime.requests[1].Messages
-	if countWorldSection(request, "tool_catalog") != 2 ||
+	if countWorldSection(request, "tool_catalog") != 1 ||
 		countWorldMode(request, "patch") != 1 {
 		t.Fatalf("catalog patch request=%+v", request)
 	}

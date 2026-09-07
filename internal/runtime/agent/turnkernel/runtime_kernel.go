@@ -454,7 +454,7 @@ func (s *RuntimeKernel) Completion() *CompletionDecision {
 	copy := *s.state.Completion
 	copy.PendingActions = append([]string(nil), copy.PendingActions...)
 	copy.ChangedPaths = append([]string(nil), copy.ChangedPaths...)
-	copy.QualityCalls = append([]string(nil), copy.QualityCalls...)
+	copy.VerificationCalls = append([]string(nil), copy.VerificationCalls...)
 	return &copy
 }
 func (s *RuntimeKernel) Convergence() *ConvergenceState {
@@ -504,7 +504,7 @@ func (s *RuntimeKernel) CompletionDeclaration() *tool.CompletionDeclaration {
 		Summary:             decision.Summary,
 		OutputMode:          decision.OutputMode,
 		ChangedPaths:        append([]string(nil), decision.ChangedPaths...),
-		VerificationCallIDs: append([]string(nil), decision.QualityCalls...),
+		VerificationCallIDs: append([]string(nil), decision.VerificationCalls...),
 		MutationRevision:    decision.Mutation,
 		CallID:              decision.CompletionCall,
 	}
@@ -543,7 +543,7 @@ func (s *RuntimeKernel) EvaluateCompletion(
 	}
 	decision := *s.state.Completion
 	decision.ChangedPaths = append([]string(nil), decision.ChangedPaths...)
-	decision.QualityCalls = append([]string(nil), decision.QualityCalls...)
+	decision.VerificationCalls = append([]string(nil), decision.VerificationCalls...)
 	return decision, nil
 }
 
@@ -722,6 +722,33 @@ func (s *RuntimeKernel) ResolveInput(requestID string) error {
 
 func (s *RuntimeKernel) RequestCancel(reason string) error {
 	return s.applyAuthoritative(CancelRequested{Reason: reason})
+}
+
+// RecordContinuation commits the cursor of a stored conversation snapshot.
+// The caller must have written the referenced content before committing the
+// cursor, so a committed fact never points at unreadable content.
+func (s *RuntimeKernel) RecordContinuation(cursor ContinuationCursor) error {
+	return s.applyAuthoritative(ContinuationRecorded{Cursor: cursor})
+}
+
+func (s *RuntimeKernel) ContinuationCursor() (ContinuationCursor, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.state.Continuation == nil {
+		return ContinuationCursor{}, false
+	}
+	return *s.state.Continuation, true
+}
+
+// NextContinuationSequence returns the sequence a new continuation snapshot
+// must carry to extend the durable cursor.
+func (s *RuntimeKernel) NextContinuationSequence() uint64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.state.Continuation == nil {
+		return 1
+	}
+	return s.state.Continuation.Sequence + 1
 }
 
 func (s *RuntimeKernel) CancellationReason() string {

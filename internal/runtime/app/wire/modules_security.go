@@ -7,7 +7,6 @@ import (
 
 	"github.com/fwtllh-png/QCode/internal/observability/diagnostics"
 	"github.com/fwtllh-png/QCode/internal/observability/verify"
-	"github.com/fwtllh-png/QCode/internal/persist/repoindex"
 	"github.com/fwtllh-png/QCode/internal/security/constitution"
 	"github.com/fwtllh-png/QCode/internal/security/permissions"
 	"github.com/fwtllh-png/QCode/internal/security/policy"
@@ -44,18 +43,7 @@ func (securityModule) Build(
 		state.platform.backend,
 		state.config.diagnosticCommands,
 	)
-	commandRunner := &verify.CommandRunner{
-		Root:    execution.Workspace,
-		Sandbox: state.platform.backend,
-		Tests: repoindex.TestMapper{
-			Index: state.platform.repositoryIndex,
-		},
-	}
-	if execution.Verify.Command != "" {
-		commandRunner.Commands = []verify.Command{{
-			Name: "custom", Command: execution.Verify.Command,
-		}}
-	}
+	commandRunner := &verify.ReceiptRunner{Root: execution.Workspace, Command: execution.Verify.Command}
 	constitutionBundle, err := constitution.Load(execution.Workspace, "")
 	if err != nil {
 		return fmt.Errorf("constitution: %w", err)

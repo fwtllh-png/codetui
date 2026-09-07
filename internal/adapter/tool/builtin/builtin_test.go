@@ -84,6 +84,21 @@ func TestCoreToolsRealWorkspace(t *testing.T) {
 
 	executeGuarded("file_read", `{"path":"main.txt"}`)
 	executeGuarded("file_edit", `{"path":"main.txt","old":"before","new":"after"}`)
+	verified := executeGuarded("exec_command",
+		`{"command":"test -f main.txt","verification":"check","covered_paths":["main.txt"]}`)
+	if verified.IsError || verified.Execution == nil ||
+		!verified.Execution.VerificationEvidenceAuthorized ||
+		verified.Outcome == nil || verified.Outcome.Facts.Verification == nil ||
+		verified.Outcome.Facts.Verification.Status != "passed" {
+		t.Fatalf("guard did not authorize unified execution evidence: %+v", verified)
+	}
+	for _, name := range []string{
+		"quality_test", "quality_diagnostics", "quality_review", "quality_verify", "quality_process_smoke",
+	} {
+		if _, _, _, err := registry.Resolve(name); err == nil {
+			t.Fatalf("removed tool %s remains registered", name)
+		}
+	}
 	search := executeDirect("search_text", `{"query":"after"}`)
 	if !strings.Contains(search.Content, `"file":"main.txt"`) ||
 		!strings.Contains(search.Content, `"line":1`) ||

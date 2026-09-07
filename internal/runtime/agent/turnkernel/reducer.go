@@ -273,6 +273,11 @@ func (Reducer) Apply(current State, command Command) (Transition, error) {
 			return Transition{}, err
 		}
 
+	case ContinuationRecorded:
+		if err := applyContinuationRecorded(&transition, current, value); err != nil {
+			return Transition{}, err
+		}
+
 	case RecoveryRequested:
 		if err := applyRecoveryRequested(&transition, current, value); err != nil {
 			return Transition{}, err

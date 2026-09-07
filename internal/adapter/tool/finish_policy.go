@@ -30,12 +30,7 @@ func FinishOnlyAllowed(name string, descriptor Descriptor) bool {
 		"list_agents",
 		"file_read",
 		"exec_command",
-		"write_stdin",
-		"quality_test",
-		"quality_diagnostics",
-		"quality_review",
-		"quality_verify",
-		"quality_process_smoke":
+		"write_stdin":
 		return true
 	default:
 		return false

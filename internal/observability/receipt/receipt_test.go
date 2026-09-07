@@ -184,11 +184,14 @@ func TestReceiptSeparatesProviderAttemptsSamplesAndCompletionRepairs(t *testing.
 	recorder := New("repair model output")
 	for _, event := range []agentengine.ModelExecution{
 		{Kind: "model_sample", SampleID: "sample-1", Reason: promptcontext.SampleNormal},
-		{Kind: "provider_attempt", SampleID: "sample-1", Attempt: 1},
-		{Kind: "provider_attempt", SampleID: "sample-1", Attempt: 2},
+		{Kind: "provider_attempt", SampleID: "sample-1", Attempt: 1, Status: protocol.ProviderAttemptStarted},
+		{Kind: "provider_attempt", SampleID: "sample-1", Attempt: 1, Status: protocol.ProviderAttemptFailed},
+		{Kind: "provider_attempt", SampleID: "sample-1", Attempt: 1, Status: protocol.ProviderAttemptRetryWait},
+		{Kind: "provider_attempt", SampleID: "sample-1", Attempt: 2, Status: protocol.ProviderAttemptStarted},
+		{Kind: "provider_attempt", SampleID: "sample-1", Attempt: 2, Status: protocol.ProviderAttemptCompleted},
 		{Kind: "model_sample", SampleID: "sample-2", Reason: promptcontext.SampleCompletionRepair},
 		{Kind: "model_sample", SampleID: "sample-3", Reason: promptcontext.SampleVerificationRepair},
-		{Kind: "provider_attempt", SampleID: "sample-2", Attempt: 1},
+		{Kind: "provider_attempt", SampleID: "sample-2", Attempt: 1, Status: protocol.ProviderAttemptStarted},
 	} {
 		value := event
 		recorder.Observe(agentengine.Event{ModelExecution: &value})
@@ -205,16 +208,20 @@ func TestReceiptSeparatesProviderAttemptsSamplesAndCompletionRepairs(t *testing.
 func TestReceiptClassifiesToolExecutions(t *testing.T) {
 	recorder := New("run and verify")
 	for _, event := range []struct {
-		name   string
-		failed bool
+		name         string
+		failed       bool
+		verification bool
 	}{
 		{name: "exec_command"},
-		{name: "quality_verify"},
+		{name: "exec_command", verification: true},
 		{name: "turn_complete"},
 		{name: "search_files", failed: true},
 	} {
 		call := provider.ToolCall{Name: event.name}
 		result := tool.Result{IsError: event.failed}
+		if event.verification {
+			tool.EnsureOutcomeFacts(&result).Verification = &verify.Evidence{Status: verify.StatusPassed}
+		}
 		recorder.Observe(agentengine.Event{
 			State: agentengine.RunningTools, ToolCall: &call, Result: &result,
 		})

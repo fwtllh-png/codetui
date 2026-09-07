@@ -43,6 +43,11 @@ func TypedHTTPFailure(
 	result := protocol.NewProblem(
 		base.Code, base.Message, base.Retryable, fact,
 	)
+	if code == provider.FailureQuota {
+		result.Code = protocol.CodeResourceExhausted
+		result.Retryable = false
+		result.Message = message
+	}
 	result.HTTPStatus, result.RateLimit = base.HTTPStatus, base.RateLimit
 	return result
 }

@@ -62,15 +62,11 @@ func TestPlanningStateIsResetBetweenTurns(t *testing.T) {
 	}
 }
 
-func TestPlanningDoesNotGateVerificationTools(t *testing.T) {
+func TestPlanningDoesNotExemptMutatingProcessesByToolName(t *testing.T) {
 	runtime := DefaultRuntime(ModeAct, PermissionBypass)
 	runtime.ConfigurePlanning(PlanningRequired)
 	for _, name := range []string{
-		"quality_test",
-		"quality_diagnostics",
-		"quality_review",
-		"quality_verify",
-		"quality_process_smoke",
+		"exec_command", "write_stdin", "fixture_host_process",
 	} {
 		invocation := planningInvocation(
 			name,
@@ -79,7 +75,7 @@ func TestPlanningDoesNotGateVerificationTools(t *testing.T) {
 				Kind: "host", ID: "localhost", Access: tool.AccessWrite,
 			}},
 		)
-		if decision := runtime.Evaluate(invocation); decision.Action != ActionAllow {
+		if decision := runtime.Evaluate(invocation); decision.Code != "plan_required" {
 			t.Fatalf("%s decision = %+v", name, decision)
 		}
 	}

@@ -1343,8 +1343,6 @@ func (s *ResultStore) projectionLimit(
 	case name == "skills.read" || name == "skills.list" ||
 		name == "skills_read" || name == "skills_list":
 		kind = "skill"
-	case strings.HasPrefix(name, "quality_"):
-		kind = "test"
 	case name == "exec_command" || name == "write_stdin":
 		kind = "build"
 	}

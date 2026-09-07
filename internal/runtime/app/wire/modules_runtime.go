@@ -209,6 +209,11 @@ func (agentModule) Build(ctx context.Context, state *buildState) error {
 			),
 			persiststate.NewSharedContentStore(store.Content()),
 		)
+		// A restarted process rebuilds the running Turn's accepted
+		// conversation from the same durable content store.
+		seedOptions.TurnContinuations = persiststate.NewSharedContentStore(
+			store.Content(),
+		)
 	}
 	defaultProfile := protocol.SessionProfile{
 		Version: protocol.SessionProfileVersion, Revision: 1,

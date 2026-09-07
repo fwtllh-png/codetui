@@ -38,6 +38,8 @@ type execCommandInput struct {
 	WritePaths     []string                     `json:"write_paths"`
 	NetworkTargets []tool.DeclaredNetworkTarget `json:"network_targets"`
 	AllowLoopback  bool                         `json:"allow_loopback"`
+	Verification   string                       `json:"verification"`
+	CoveredPaths   []string                     `json:"covered_paths"`
 }
 
 type writeStdinInput struct {
@@ -69,6 +71,7 @@ func (e *protocolExecutor) TrustedBinding() tool.TrustedBinding {
 	binding.Capability = tool.CapabilityProcess
 	binding.ValidateMissingWriteParent = e.validateMissingWriteParent
 	binding.Required.ProcessTree = controlmatrix.ProcessTreeGroupKill
+	binding.ProducesVerificationEvidence = true
 	return binding
 }
 
@@ -96,6 +99,9 @@ func registerProcessProtocol(
 		Disposition: tool.DispositionDetached,
 		Validate: func(input execCommandInput) error {
 			if _, err := processYield(input.YieldTimeMS, defaultExecYield); err != nil {
+				return err
+			}
+			if err := validateVerification(input); err != nil {
 				return err
 			}
 			return validateNetworkTargets(input.NetworkTargets)
@@ -168,15 +174,17 @@ func processOutcome(result tool.Result) tool.Outcome {
 		outcome.Facts = &tool.OutcomeFacts{}
 	}
 	outcome.Facts.ProcessSession = &tool.ProcessSessionFact{
-		SessionID:    stringMetadata(result.Metadata, "session_id"),
-		Cursor:       uint64Metadata(result.Metadata, "cursor"),
-		Running:      boolMetadata(result.Metadata, "running"),
-		ExitCode:     intMetadata(result.Metadata, "exit_code"),
-		TimedOut:     boolMetadata(result.Metadata, "timed_out"),
-		TTY:          boolMetadata(result.Metadata, "tty"),
-		Archived:     boolMetadata(result.Metadata, "archived"),
-		PendingBytes: intMetadata(result.Metadata, "pending_bytes"),
-		OmittedBytes: intMetadata(result.Metadata, "omitted_bytes"),
+		SessionID:       stringMetadata(result.Metadata, "session_id"),
+		SourceSessionID: stringMetadata(result.Metadata, "source_session_id"),
+		Terminated:      boolMetadata(result.Metadata, "terminated"),
+		Cursor:          uint64Metadata(result.Metadata, "cursor"),
+		Running:         boolMetadata(result.Metadata, "running"),
+		ExitCode:        intMetadata(result.Metadata, "exit_code"),
+		TimedOut:        boolMetadata(result.Metadata, "timed_out"),
+		TTY:             boolMetadata(result.Metadata, "tty"),
+		Archived:        boolMetadata(result.Metadata, "archived"),
+		PendingBytes:    intMetadata(result.Metadata, "pending_bytes"),
+		OmittedBytes:    intMetadata(result.Metadata, "omitted_bytes"),
 	}
 	return outcome
 }
@@ -211,7 +219,7 @@ func execCommandDescriptor() tool.Descriptor {
 			"10000 and must not exceed 30000. timeout_ms, when set, kills the " +
 			"process group; it does not keep the first sample blocked. " +
 			"If the command starts a server or daemon it never exits: verify " +
-			"its startup output and close the session instead of polling for " +
+			"its startup output and close the session instead of polling for exit. " +
 			"The workspace is read-only by default. write_paths permits only exact " +
 			"regular files whose parent directories already exist; it does not permit " +
 			"mkdir. To create files in missing directories, use file_write or " +
@@ -219,7 +227,11 @@ func execCommandDescriptor() tool.Descriptor {
 			"Use $TMPDIR for compiler outputs and caches; absolute /tmp remains denied. " +
 			"Use cwd instead of prepending cd. Do not pipe verification commands " +
 			"through head or tail because POSIX pipelines report the last command's " +
-			"status; use output_tokens or a quality tool to bound output. Git metadata " +
+			"status; use output_tokens to bound output. To record validation evidence, " +
+			"declare verification (test, build, lint, or check) and exact workspace-relative " +
+			"covered_paths. Declared verification uses POSIX set -e; use && to chain checks. " +
+			"Only a natural exit on unchanged inputs can pass; running " +
+			"or terminated processes never count as passed verification. Git metadata " +
 			"is protected: use the dedicated git_add, git_commit, git_switch, " +
 			"git_fetch, git_pull, and git_push tools for Git mutations. " +
 			"Commands that access the network must declare every destination in " +
@@ -242,6 +254,7 @@ func execCommandDescriptor() tool.Descriptor {
 			PathsField:          "write_paths",
 			NetworkTargetsField: "network_targets",
 			LoopbackField:       "allow_loopback",
+			ReadPathsField:      "covered_paths",
 		},
 		ParallelPolicy:     tool.ParallelConcurrent,
 		SandboxRequirement: tool.SandboxStrong,
@@ -251,7 +264,7 @@ func execCommandDescriptor() tool.Descriptor {
 		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"command": map[string]any{"type": "string"},
+				"command": map[string]any{"type": "string", "minLength": 1},
 				"cwd":     map[string]any{"type": "string"},
 				"tty":     map[string]any{"type": "boolean"},
 				"yield_time_ms": map[string]any{
@@ -266,6 +279,13 @@ func execCommandDescriptor() tool.Descriptor {
 				"rows":          map[string]any{"type": "integer"},
 				"cols":          map[string]any{"type": "integer"},
 				"description":   map[string]any{"type": "string"},
+				"verification": map[string]any{
+					"type": "string", "enum": []any{"test", "build", "lint", "check"},
+				},
+				"covered_paths": map[string]any{
+					"type": "array", "minItems": 1,
+					"items": map[string]any{"type": "string", "minLength": 1},
+				},
 				"write_paths": map[string]any{
 					"type":  "array",
 					"items": map[string]any{"type": "string"},
@@ -435,6 +455,9 @@ func (p *commandProtocol) execCommand(
 	}
 	sandboxBackend, requireStrong := processSandbox(ctx, p.backend)
 	command := input.Command
+	if input.Verification != "" {
+		command = "set -e\n" + command
+	}
 	if requireStrong {
 		command = wrapSandboxTempCommand(command)
 	}
@@ -448,6 +471,10 @@ func (p *commandProtocol) execCommand(
 	}
 	if threadID == "" {
 		return tool.Result{}, errors.New("exec_command requires a thread identity")
+	}
+	evidence, err := p.prepareVerification(input)
+	if err != nil {
+		return tool.Result{}, err
 	}
 	id, err := p.manager.Create(
 		context.WithoutCancel(ctx),
@@ -490,10 +517,11 @@ func (p *commandProtocol) execCommand(
 	}
 	wait.Data = output.String()
 	result := sessionResult(id, wait, outputTokens)
+	attachVerification(&result, evidence, wait)
 	status := "running"
 	if !wait.Running {
 		status = "completed"
-		if wait.ExitCode != 0 {
+		if wait.ExitCode != 0 || wait.Terminated {
 			status = "failed"
 		}
 	} else {
@@ -722,9 +750,11 @@ func (p *commandProtocol) writeStdin(
 		return tool.Result{
 			Content: "closed",
 			Metadata: map[string]any{
-				"session_id": input.SessionID,
-				"running":    false,
-				"closed":     true,
+				"session_id":        input.SessionID,
+				"source_session_id": input.SessionID,
+				"terminated":        true,
+				"running":           false,
+				"closed":            true,
 			},
 		}, nil
 	}
@@ -842,12 +872,14 @@ func sessionResult(
 ) tool.Result {
 	content, omitted := limitProcessOutput(wait.Data, outputTokens*4)
 	metadata := map[string]any{
-		"session_id": id,
-		"cursor":     wait.Cursor,
-		"running":    wait.Running,
-		"exit_code":  wait.ExitCode,
-		"timed_out":  wait.TimedOut,
-		"tty":        wait.TTY,
+		"session_id":        id,
+		"source_session_id": id,
+		"terminated":        wait.Terminated,
+		"cursor":            wait.Cursor,
+		"running":           wait.Running,
+		"exit_code":         wait.ExitCode,
+		"timed_out":         wait.TimedOut,
+		"tty":               wait.TTY,
 	}
 	if omitted > 0 {
 		metadata["omitted_bytes"] = omitted
@@ -858,7 +890,7 @@ func sessionResult(
 	}
 	return tool.Result{
 		Content:  content,
-		IsError:  !wait.Running && wait.ExitCode != 0,
+		IsError:  !wait.Running && (wait.ExitCode != 0 || wait.Terminated),
 		Metadata: metadata,
 	}
 }
