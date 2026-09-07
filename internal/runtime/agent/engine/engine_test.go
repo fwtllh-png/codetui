@@ -3807,3 +3807,88 @@ func assertToolPairs(t *testing.T, messages []provider.Message) {
 		}
 	}
 }
+
+func TestMidTurnSurfacePruneSavesOverpressureTurn(t *testing.T) {
+	engine := newEngine(t, &scriptedProvider{}, tool.NewRegistry(nil, nil))
+	route := mustTestRouteWithContext(t, 1024)
+	engine.options.Route = route
+	engine.options.Routes, _ = model.NewRouteSet(route, nil, false)
+	engine.options.MaxOutputTokens = 128
+	engine.options.Context.Window.AutoTokens = 500
+	bigResult := func(callID, body string) provider.Message {
+		encoded, err := json.Marshal(
+			tool.ModelResult("read", tool.Result{Content: body}),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return toolResultMessage(1, callID, string(encoded))
+	}
+	history := []provider.Message{
+		messageWithText(provider.RoleUser, "fix the parser", 1),
+		toolCallMessage(1, "call_1", "read", `{}`),
+		bigResult("call_1", strings.Repeat("first ", 600)),
+		toolCallMessage(1, "call_2", "read", `{}`),
+		bigResult("call_2", strings.Repeat("second ", 600)),
+		toolCallMessage(1, "call_3", "read", `{}`),
+		bigResult("call_3", "latest"),
+	}
+	snapshot := agentcontext.NewMessageLedger(agentcontext.LedgerInput{}).Snapshot()
+	var receipts []*CompactionReceipt
+	window, err := engine.runCompactGate(
+		t.Context(), &history, snapshot, 128, CompactionPhaseMidTurn, true,
+		func(_ State, event Event) error {
+			if event.Compaction != nil {
+				receipts = append(receipts, event.Compaction)
+			}
+			return nil
+		}, 0, engine.contextViewProject(nil),
+	)
+	if err != nil {
+		t.Fatalf("over-pressure turn failed instead of degrading: %v", err)
+	}
+	if window.hardLimit != 0 && window.total > window.hardLimit {
+		t.Fatalf("degraded window still overflows: %+v", window)
+	}
+	assertToolPairs(t, history)
+	var pruned, latestIntact int
+	for _, message := range history {
+		for _, block := range message.Blocks {
+			if block.Type != provider.ContentToolResult ||
+				block.ToolResult == nil {
+				continue
+			}
+			var value tool.Result
+			if err := json.Unmarshal(
+				[]byte(block.ToolResult.Content), &value,
+			); err != nil {
+				t.Fatalf("degraded result is not a projection: %v", err)
+			}
+			if block.ToolResult.CallID == "call_3" {
+				if value.Content != "latest" || value.Handle != "" {
+					t.Fatalf("latest batch degraded: %+v", value)
+				}
+				latestIntact++
+				continue
+			}
+			if value.Handle == "" || !value.Truncated {
+				t.Fatalf("closed surface kept without a handle: %+v", value)
+			}
+			pruned++
+		}
+	}
+	if pruned != 2 || latestIntact != 1 {
+		t.Fatalf("pruned=%d latest=%d", pruned, latestIntact)
+	}
+	var surfaceReceipt *CompactionReceipt
+	for _, receipt := range receipts {
+		if receipt.Mode == "surface" {
+			surfaceReceipt = receipt
+		}
+	}
+	if surfaceReceipt == nil ||
+		surfaceReceipt.PrunedToolResults != pruned ||
+		surfaceReceipt.PrunedBytes <= 0 {
+		t.Fatalf("surface receipts = %+v", receipts)
+	}
+}

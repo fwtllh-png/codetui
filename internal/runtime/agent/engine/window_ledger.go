@@ -59,6 +59,9 @@ func (e *Engine) observeTokenWindow(
 	if context == nil {
 		return
 	}
+	// Calibrate before the plausibility guard below: an overflowing report
+	// still carries the true estimate-to-usage ratio for its request.
+	e.tokenCalibration.Observe(context.EstimatedTokens, inputTokens)
 	hardLimit := e.contextCapacity().ContextTokens
 	if hardLimit != 0 && inputTokens > hardLimit {
 		return

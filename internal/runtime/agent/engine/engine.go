@@ -111,6 +111,8 @@ type Engine struct {
 	approvalRecovery turnkernel.RecoveredInteraction[toolguard.ApprovalDecision]
 	inputRecovery    turnkernel.RecoveredInteraction[interact.Reply]
 
+	tokenCalibration *calibratedTokenEstimator
+
 	activeScope     *Scope
 	lastScope       *Scope
 	admissionKernel *turnkernel.RuntimeKernel
@@ -193,6 +195,10 @@ func New(options Options) (*Engine, error) {
 	if options.TokenEstimator == nil {
 		options.TokenEstimator = HeuristicTokenEstimator{}
 	}
+	// Wrap the estimator so provider-reported usage calibrates the runes
+	// heuristic from the first observation of the session.
+	calibration := &calibratedTokenEstimator{inner: options.TokenEstimator}
+	options.TokenEstimator = calibration
 	if options.Metrics == nil {
 		options.Metrics = noopMetrics{}
 	}
@@ -244,12 +250,13 @@ func New(options Options) (*Engine, error) {
 	}
 	engine := &Engine{
 		options: options, guard: options.Guard, journal: options.Journal,
-		promptCacheBase: options.PromptCacheKey,
-		profileReadOnly: profileReadOnlyFromOptions(options),
-		turnIDs:         make(map[string]uint64),
-		appliedDeltas:   make(map[string]string),
-		stateEpoch:      1,
-		context:         agentcontext.NewAuthority(),
+		promptCacheBase:  options.PromptCacheKey,
+		profileReadOnly:  profileReadOnlyFromOptions(options),
+		tokenCalibration: calibration,
+		turnIDs:          make(map[string]uint64),
+		appliedDeltas:    make(map[string]string),
+		stateEpoch:       1,
+		context:          agentcontext.NewAuthority(),
 	}
 	engine.context.SetWindow(window)
 	engine.seedWorkingSet()

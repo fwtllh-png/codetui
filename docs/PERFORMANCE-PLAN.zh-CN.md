@@ -2,7 +2,7 @@
 
 | 项 | 内容 |
 | --- | --- |
-| 状态 | P0、P1 全部已实施；P2-1 已实施（见第 7 节）；P2-2、P2-3 未实施 |
+| 状态 | 全部 13 项已实施（P0×5、P1×5、P2×3，见第 7 节实施记录） |
 | 日期 | 2026-09-06 |
 | 基线 | 当前 `main`（bc7c94dc）+ 工作区未提交改动 |
 | 范围 | Runtime 任务推进速度、采样轮次效率、上下文保持 |
@@ -518,3 +518,62 @@ preserve 在收敛终结之外可用/正文为空仍拒绝）+ engine 一例
 - **测试**：引擎摘录方法两例（有界前缀、逃逸/缺失/二进制/空文件拒绝，
   race 通过）；capsule 两例（摘录携带 + 密钥脱敏 + receipt 字节记账、
   预算压力下先剥摘录再丢文件）。
+
+### P2-2 实施记录（2026-09-06）
+
+受控的 mid-turn 压缩：
+
+- **实现**（`engine/history_recovery.go` 的 `runCompactGate` mid-turn 分支）：
+  在"一次 Visible Tail Fold"与"`resource_exhausted` 终止整回合"之间插入一层
+  受控降级——调用既有的 `pruneToolResultSurfaces`（force 模式）把**已闭合**
+  工具结果的面替换为带 `result_get` Handle 的 head+tail 有界投影；最新一批
+  工具结果受 `PruneSurfaces` 既有保护、永不降级；每结果预算由
+  `dynamicToolResultSurfaceBytes` 从剩余窗口容量按结果数派生（无新阈值）。
+- **前缀缓存一致性**：改写已发送表面破坏 append-only 前缀，降级成功后
+  调用 `advanceTokenWindow()` 推进窗口，下一请求在降级后的前缀上重建缓存。
+- **语义保持**：降级后仍超硬限的回合照旧走 `resource_exhausted`
+  fail-closed（`TestMidTurnCompactionFailsClosedWhenNoSafeCandidateFits`
+  不改一行通过——无工具结果可降级时行为不变）；"partial provider output
+  cannot be compacted" 检查在降级之后执行，超大的续传局部输出仍立即失败。
+- **幂等**：被降级的结果带自洽 Admission receipt（kind=context_surface），
+  下一轮 `admitToolResultHistory` 校验通过、不重复改写；原文经 Handle 仍可
+  `result_get` 回读，Durable Journal 不受影响。
+- 降级以 `CompactionReceipt{Status: pruned, Mode: surface}` 发 `Compacting`
+  事件，回执含 `PrunedToolResults`/`PrunedBytes` 与前后窗口 token。
+- **测试**：`TestMidTurnSurfacePruneSavesOverpressureTurn`（精确窗口夹具
+  1024 tokens、两份 3600 字符闭合结果超硬限）断言：回合不再以
+  resource_exhausted 失败、闭合面全部带 Handle 降级、最新一批原样保留、
+  工具配对完整、surface 回执记账正确（race 通过）。
+- 架构文档采样路径段落已同步该分层降级行为。
+
+### P2-3 实施记录（2026-09-06）
+
+token 估算校准前置：
+
+- **调研结论**：WindowLedger 已有"锚点 + 增量"投影（`Prepare` 用
+  `LastProviderInputTokens ± 估算差值` 校正活跃窗口），但**估算器本身
+  （字符数启发式）从不校准**——配对点就在 `observeTokenWindow`：
+  `context.EstimatedTokens`（该请求的估算）与 provider 上报的
+  `InputTokens` 同请求可比，比率随手可得。
+- **实现**（`engine/token_estimator.go`）：
+  - `calibratedTokenEstimator` 包装会话估算器（含测试注入的定制估算器，
+    错误透传）：未观测前行为与原估算逐位一致；首个观测后按
+    `真实值 / 估算值` 比率缩放后续估算，向上取整（预算宁紧勿松）。
+  - 比率采用"最新观测直接生效"——分词器在同一会话内稳定，立即采用
+    才能校正下一个采样，平滑平均反而延迟收敛。
+  - 可信区间 `[1/4, 8]` 为源码内文档化常量（字符启发式对密集书写系统
+    低估约 4 倍、对稀疏文本高估约 2 倍；区间外视为 provider 记账异常
+    不予学习），边界测试在两端精确锁定。
+  - 校准在 `observeTokenWindow` 的合理性守卫**之前**执行——超限上报
+    仍携带真实的估算比率。
+  - `EstimateImage` 转发内层估算器，图片记账保持独立通道。
+- **接入面**：校准后的估算器经 `options.TokenEstimator` 流入窗口测量
+  （`Measure`）、经济准入、吞吐 TPM 准入与 narrative 限额——全部
+  自动受益，无需逐点改动。Fork 的子引擎与父共享同一校准（同
+  Provider/模型，分词器一致）。
+- **已知边界**：比率不持久化，重启后首个采样按未校准估算（与今天
+  冷启动行为一致，无回归）；持久化到 WindowLedger 留作后续优化。
+- **测试**：单元四例（比率采用与向上取整、区间外忽略、零值守卫、
+  内层错误透传、边界比率精确接受）+ 接线一例
+  （`observeTokenWindow` 后会话估算器被校准），race 通过。
+- 架构文档 ContextCapacity 段落已补充校准语义。

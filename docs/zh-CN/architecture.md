@@ -373,6 +373,10 @@ Turn 开始时冻结 `ContextCapacity`：模型 Context Window 扣除模型能�
 Ceiling 和 Turn/Session Budget 共同确定的 Output Reserve 后，得到硬输入容量。
 默认 Prepare、Auto Compact 与 Emergency 都等于该容量，不再按百分比提前触发；
 Operator 可显式配置更小的成本或延迟 Ceiling。Transport 类型不得暗中套用固定档位。
+Token 估算默认使用字符数启发式；Provider 首次上报真实 Input Tokens 后，Runtime
+按同请求的 `真实值 / 估算值` 比率校准后续估算（比率限定在记录于源码并有边界
+测试锁定的可信区间内，区间外的上报视为记账异常不予学习），使会话早期的窗口
+与吞吐准入贴合真实分词压力，而不是通过反复 Prune/Fold 事后发现。
 Provider Throughput 是第三条独立容量平面：`execution.tokens_per_minute` 或 Token
 专用限流 Header 给出已知 Burst 时，Runtime 在发送前按 `投影输入 + 输出保留` 准入；
 未知则跳过 Token Admission，不按模型名称发明 TPM。超过已知 Burst 或等待将超过
@@ -495,7 +499,10 @@ Terminal Envelope 不再重复写入完整 Session Snapshot，而是引用 CAS �
 Manifest。CAS 先按 Digest 幂等 Stage，SQLite 再提交 Manifest 可达性和 Terminal
 事实。采样路径按公开合同 `context.view.recent_tail_turns` 和剩余硬输入（或显式
 `context.view.history_token_ceiling`）投影原文，超窗时再用一次 Visible Tail
-Fold；History Replacement 只发生在显式 `thread.compact` 或 Turn 终态维护。
+Fold；Fold 后仍超硬输入的 Turn 先做一层受控降级——已闭合工具结果的面被替换为
+带 `result_get` Handle 的有界投影（最新一批永不降级），并推进 Token Window 使
+前缀缓存按降级后的前缀重建；降级后仍超限才以 `resource_exhausted` 失败。
+History Replacement 只发生在显式 `thread.compact` 或 Turn 终态维护。
 `context.view.narrative_mode=post_turn` 写独立 Digest 分区，不阻塞下一轮 Sample。
 带出处的未完成工作提升为 Plan Todo 后进入 `session_state`；每个闭合 Turn 在
 Dynamic（History 之后）追加一块 write-once Checkpoint。旧 Turn 原文通过
