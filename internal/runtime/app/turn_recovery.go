@@ -79,6 +79,9 @@ func (r StartTurnHandler) validateStart(payload *protocol.StartTurnPayload) erro
 			)
 		}
 	}
+	if err := r.requireRetainedTurn(r.ctx, sourceThreadID, source); err != nil {
+		return err
+	}
 	if !terminal {
 		return protocol.NewProblem(
 			protocol.CodeConflict,

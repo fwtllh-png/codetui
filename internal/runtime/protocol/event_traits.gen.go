@@ -48,5 +48,6 @@ var eventTraits = map[EventKind]EventTraits{
 	"turn.started":          {"lifecycle", "turn", "retained", "turn", false},
 	"turn.steered":          {"interaction", "turn", "retained", "turn", false},
 	"turn.verification":     {"evidence", "turn", "retained", "mutation", false},
+	"turn.withdrawn":        {"lifecycle", "turn", "retained", "turn", false},
 	"usage":                 {"accounting", "turn", "retained", "sample", false},
 }

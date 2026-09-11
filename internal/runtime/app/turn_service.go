@@ -94,23 +94,20 @@ func (s *TurnService) run(
 		return
 	}
 	if errors.Is(turnContext.Err(), context.Canceled) {
-		itemID, opID := payload.ItemID, operation.ID
-		if stored, ok := r.active.LookupTurn(payload.TurnID); ok {
-			if stored.ItemID != "" {
-				itemID = stored.ItemID
-			}
-			if stored.OperationID != "" {
-				opID = stored.OperationID
-			}
-		}
+		// The engine owns the decision; the terminal projection re-projects
+		// live events, so it must stay under the operation that emitted them.
+		// Attributing it to the cancel operation makes stable commentary
+		// re-projection collide with its live event and silently strands the
+		// outbox (turn row stays active, queue never drains).
 		releaseActive()
-		// Engine owns the decision; TurnService binds cancel identities.
-		if sink.publishTerminalAs(opID, itemID) == nil {
+		if terminalErr := sink.publishTerminal(); terminalErr == nil {
 			r.ArtifactService.PersistTerminalArtifactForTurn(
 				context.Background(), payload.ThreadID, payload.TurnID,
 			)
 			sink.commitOperation()
 			r.TurnQueueService.Drain(payload.ThreadID)
+		} else if rejectErr := r.reject(operation, terminalErr); rejectErr == nil {
+			r.commit(operation.ID)
 		}
 		return
 	}

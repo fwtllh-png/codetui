@@ -32,5 +32,15 @@ func (r *Runtime) HistoryReadFence(
 			nil,
 		)
 	}
-	return store.PresentationReadFence(ctx, sessionID)
+	fence, err := store.PresentationReadFence(ctx, sessionID)
+	if err != nil {
+		return fence, err
+	}
+	if fence.Session.LatestTurnID != "" {
+		fence.Session.LatestTurnWithdrawn, err = r.TurnWithdrawn(ctx, fence.Session.ThreadID, fence.Session.LatestTurnID)
+		if fence.Session.LatestTurnWithdrawn {
+			fence.Session.Status = protocol.SessionStatusIdle
+		}
+	}
+	return fence, err
 }

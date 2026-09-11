@@ -335,6 +335,27 @@ Goal。源 Turn 已读路径在开局写入 KnownReads；覆盖范围内的重�
 无法回放时放行，git 巡视不再被拒。
 恢复请求提交后按钮保持 Pending，直到 Runtime 发布新 Turn 或明确拒绝请求。
 
+### 撤回最近一个 Turn
+
+最近一个 Turn 的用户消息气泡右下方显示垃圾桶按钮 `Withdraw turn`，用于撤回该轮
+误发请求。点击后打开与应用其余弹窗一致的居中确认框，不撑开聊天内容，也不依赖浏览器
+原生弹窗。支持 Escape、取消与焦点恢复；提交期间显示 `Withdrawing...` 并禁止重复提交，
+失败原因显示在确认框中，不会隐藏原 Turn。确认后，运行中的
+Turn 及当前会话的活动 Child Thread 先停止并完成结算，Runtime 再恢复该 Turn
+开始前的完整模型上下文，包括历史、Plan、摘要和恢复 Checkpoint。撤回期间拒绝
+新的执行操作，排队 Prompt 不会自动启动；队列仍可编辑或移除。
+
+撤回成功后，整轮默认收起为 `Turn withdrawn / Excluded from context`，点击可展开审计
+记录；通过搜索或 Trajectory 定位该轮时自动展开。不再允许该 Turn 的 Retry、Continue、
+Checkpoint Restore/Fork 或 Plan 执行。Composer 恢复普通发送，不会继续误发的请求。
+`turn_history` 不再回读被撤回 Turn。只支持最近一个 Turn，不支持删除历史中间一轮；
+重复撤回同一轮是幂等操作。升级前未保存启动前基线的旧 Turn 会明确拒绝撤回，
+不会通过删文本猜测原始上下文。
+
+撤回不自动回滚文件或外部副作用。已保留的 Journal 草稿按用户确认结算，文件保持
+原样，实际修改路径继续以未验证风险进入上下文；费用和 Token 用量也不回退。
+撤回记录与当前上下文指针原子持久化，刷新和重启不会重新启用被撤回的请求。
+
 ## 配置与凭证
 
 首次进入且尚未完成 Runtime Setup 时，Web 不提供默认 Provider 或 Model。用户必须

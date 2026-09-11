@@ -31,6 +31,9 @@ func (s *OperationService) SubmitWithKey(
 	if s.workspaceOperation {
 		return retryableProblem(protocol.CodeConflict, "a Workspace Git operation is active")
 	}
+	if len(s.withdrawing) != 0 {
+		return retryableProblem(protocol.CodeConflict, "Turn withdrawal is in progress")
+	}
 	if len(s.operations) == cap(s.operations) {
 		s.metrics.Error()
 		return ErrQueueFull
@@ -164,5 +167,9 @@ func (s *OperationService) commitLocal(operationID protocol.OperationID) {
 		s.committed[operationID] = pending
 	}
 	delete(s.accepted, operationID)
+	if s.changed != nil {
+		close(s.changed)
+		s.changed = make(chan struct{})
+	}
 	s.mu.Unlock()
 }

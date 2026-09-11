@@ -64,6 +64,7 @@ func installRuntimeServices(runtime *Runtime, operationBuffer int) {
 		accepted:     make(map[protocol.OperationID]PendingOperation),
 		acceptedKeys: make(map[string]protocol.OperationID),
 		committed:    make(map[protocol.OperationID]PendingOperation),
+		withdrawing:  make(map[protocol.ThreadID]bool),
 	}
 	runtime.RecoveryService = &RecoveryService{Runtime: runtime}
 	runtime.HistoryService = sessionhistory.NewService(runtime)
@@ -85,6 +86,8 @@ type OperationService struct {
 	committed          map[protocol.OperationID]PendingOperation
 	accepting          bool
 	workspaceOperation bool
+	withdrawing        map[protocol.ThreadID]bool
+	changed            chan struct{}
 }
 
 func (s *OperationService) snapshot() (processed uint64, pending int) {
@@ -111,7 +114,7 @@ func (s *OperationService) hasPendingSession(sessionID string) bool {
 func (s *OperationService) hasWorkspaceOperation() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.workspaceOperation
+	return s.workspaceOperation || len(s.withdrawing) != 0
 }
 
 func (s *OperationService) pendingOperations() []PendingOperation {

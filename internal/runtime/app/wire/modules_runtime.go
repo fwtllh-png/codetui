@@ -13,6 +13,7 @@ import (
 	agentengine "github.com/fwtllh-png/QCode/internal/runtime/agent/engine"
 	promptcontext "github.com/fwtllh-png/QCode/internal/runtime/agent/prompt"
 	"github.com/fwtllh-png/QCode/internal/runtime/app"
+	apppersistence "github.com/fwtllh-png/QCode/internal/runtime/app/persistence"
 	"github.com/fwtllh-png/QCode/internal/runtime/protocol"
 	"github.com/fwtllh-png/QCode/internal/security/policy"
 )
@@ -194,6 +195,7 @@ func (agentModule) Build(ctx context.Context, state *buildState) error {
 		InputHost: session.inputHost},
 	}
 	if store := state.options.PersistentStore; store != nil {
+		seedOptions.TurnContexts = apppersistence.NewContextRebaseRepository(store)
 		seedOptions.SessionForTurn = func(
 			ctx context.Context,
 			turnID string,

@@ -1163,6 +1163,17 @@ func (s *Server) turnRecover(
 	)
 }
 
+func (s *Server) turnWithdraw(r *http.Request, dependencies Dependencies) (any, error) {
+	var request protocol.TurnWithdrawRequest
+	if err := s.decodeRequest(r, &request); err != nil {
+		return nil, err
+	}
+	if err := dependencies.Runtime.WithdrawTurn(r.Context(), request); err != nil {
+		return nil, err
+	}
+	return struct{}{}, nil
+}
+
 func (s *Server) turnQueue(
 	r *http.Request,
 	dependencies Dependencies,

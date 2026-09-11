@@ -270,7 +270,7 @@ func (r *Runtime) beginWorkspaceOperation() (func(), error) {
 	if !s.accepting {
 		return nil, ErrClosed
 	}
-	if s.workspaceOperation || len(s.accepted) != 0 {
+	if s.workspaceOperation || len(s.withdrawing) != 0 || len(s.accepted) != 0 {
 		return nil, retryableProblem(protocol.CodeConflict, "finish pending work before changing Git state")
 	}
 	r.EventService.mu.Lock()

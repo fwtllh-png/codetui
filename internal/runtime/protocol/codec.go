@@ -68,6 +68,7 @@ var eventData = []struct {
 	{EventTurnReverted, func() EventData { return &TurnRevertedData{} }},
 	{EventCheckpointCreated, func() EventData { return &CheckpointCreatedData{} }},
 	{EventCheckpointRestored, func() EventData { return &CheckpointRestoredData{} }},
+	{EventTurnWithdrawn, func() EventData { return &TurnWithdrawnData{} }},
 	{EventCheckpointForked, func() EventData { return &CheckpointForkedData{} }},
 	{EventTurnCompaction, func() EventData { return &TurnCompactionData{} }},
 	{EventAgentSpawned, func() EventData { return &AgentSpawnedData{} }},

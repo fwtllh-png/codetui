@@ -108,6 +108,9 @@ func (r *Service) PrepareTurnRecovery(
 	if err := ensureSessionQuiescent(current, string(request.Action)); err != nil {
 		return TurnRecoveryPreparation{}, err
 	}
+	if current.LatestTurnWithdrawn && current.LatestTurnID == request.SourceTurnID {
+		return TurnRecoveryPreparation{}, runtimeProblem(protocol.CodeConflict, "Turn was withdrawn and cannot be recovered", nil)
+	}
 	if current.LatestTurnID != "" &&
 		current.LatestTurnID != request.SourceTurnID {
 		return TurnRecoveryPreparation{}, resourceProblem(
@@ -799,6 +802,10 @@ func (r *Service) Checkpoint(
 	if checkpoint.SessionID != sessionID {
 		return protocol.SessionCheckpoint{}, runtimeProblem(protocol.CodeInvalidArgument, "Checkpoint does not belong to the Session", nil)
 	}
+	if err := r.requireRetainedSource(ctx, checkpoint.ThreadID, checkpoint.TurnID); err != nil {
+		checkpoint.CanRestore, checkpoint.CanFork = false, false
+		return checkpoint, nil
+	}
 	profile, err := r.SessionProfile(ctx, sessionID)
 	if err != nil {
 		return protocol.SessionCheckpoint{}, err
@@ -814,6 +821,11 @@ func (r *Service) RestoreCheckpoint(
 	ctx context.Context,
 	sessionID, checkpointID string,
 ) (protocol.CheckpointRestoreResult, error) {
+	release, err := r.beginContextMutation()
+	if err != nil {
+		return protocol.CheckpointRestoreResult{}, err
+	}
+	defer release()
 	current, checkpoint, history, contextSnapshot, err := r.checkpointState(
 		ctx,
 		sessionID,
@@ -1027,6 +1039,11 @@ func (r *Service) ForkCheckpoint(
 	ctx context.Context,
 	sessionID, checkpointID, title string,
 ) (protocol.CheckpointForkResult, error) {
+	release, err := r.beginContextMutation()
+	if err != nil {
+		return protocol.CheckpointForkResult{}, err
+	}
+	defer release()
 	_, checkpoint, history, contextSnapshot, err := r.checkpointState(
 		ctx,
 		sessionID,
@@ -1332,6 +1349,9 @@ func (r *Service) ensurePlanExecutionReady(
 	current protocol.SessionSummary,
 	artifact protocol.SessionPlanArtifact,
 ) error {
+	if err := r.requireRetainedSource(ctx, artifact.ThreadID, artifact.TurnID); err != nil {
+		return err
+	}
 	if readiness, ok := r.ArtifactRuntime.(interface {
 		EnsurePlanExecutionReady(
 			context.Context,
@@ -1378,6 +1398,9 @@ func (r *Service) PreparePlanExecutionTo(
 			protocol.ProblemReasonWrongSession,
 			planID,
 		)
+	}
+	if err := r.requireRetainedSource(ctx, artifact.ThreadID, artifact.TurnID); err != nil {
+		return PlanExecutionPreparation{}, err
 	}
 	sourceProfile, err := r.SessionProfile(ctx, sourceSessionID)
 	if err != nil {
@@ -1513,6 +1536,9 @@ func (r *Service) checkpointState(
 				protocol.ProblemReasonWrongSession,
 				checkpointID,
 			)
+	}
+	if err := r.requireRetainedSource(ctx, checkpoint.ThreadID, checkpoint.TurnID); err != nil {
+		return protocol.SessionSummary{}, protocol.SessionCheckpoint{}, nil, nil, err
 	}
 	currentProfile, err := r.SessionProfile(ctx, sessionID)
 	if err != nil {

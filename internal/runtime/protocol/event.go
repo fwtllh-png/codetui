@@ -48,6 +48,7 @@ const (
 	EventTurnReverted        EventKind = "turn.reverted"
 	EventCheckpointCreated   EventKind = "checkpoint.created"
 	EventCheckpointRestored  EventKind = "checkpoint.restored"
+	EventTurnWithdrawn       EventKind = "turn.withdrawn"
 	EventCheckpointForked    EventKind = "checkpoint.forked"
 	EventTurnCompaction      EventKind = "turn.compaction"
 	EventTurnVerification    EventKind = "turn.verification"

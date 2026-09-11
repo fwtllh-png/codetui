@@ -124,6 +124,9 @@ func GenerateSchema() *Schema {
 	schema.Envelope["turn_recovery_request"] = schemaOf(
 		reflect.TypeOf(&TurnRecoveryRequest{}),
 	)
+	schema.Envelope["turn_withdraw_request"] = schemaOf(
+		reflect.TypeOf(&TurnWithdrawRequest{}),
+	)
 	schema.Envelope["plan_transition_request"] = schemaOf(
 		reflect.TypeOf(&PlanTransitionRequest{}),
 	)

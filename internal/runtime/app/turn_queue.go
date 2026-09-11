@@ -267,6 +267,12 @@ func (s *TurnQueueService) next(threadID protocol.ThreadID) (protocol.QueuedTurn
 }
 
 func (s *TurnQueueService) Drain(threadID protocol.ThreadID) {
+	s.runtime.OperationService.mu.Lock()
+	withdrawing := len(s.runtime.OperationService.withdrawing) != 0
+	s.runtime.OperationService.mu.Unlock()
+	if withdrawing {
+		return
+	}
 	if _, active := s.runtime.active.LookupThread(threadID); active {
 		return
 	}

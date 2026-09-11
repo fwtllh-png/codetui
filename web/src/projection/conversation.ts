@@ -61,6 +61,7 @@ export type ConversationNode =
       readonly text: string;
       readonly images: readonly ProjectedUserImage[];
       readonly steering?: boolean;
+      readonly withdrawn?: boolean;
     }
   | {
       readonly id: string;
@@ -267,6 +268,19 @@ export class ConversationProjection {
           event.turn_id,
           `output-${event.turn_id}-after-${event.id}`
         );
+        break;
+      case "turn.withdrawn":
+        for (const node of this.nodes.values()) {
+          if (node.turnID !== event.turn_id) continue;
+          if (node.kind === "user") this.put({...node, withdrawn: true});
+          if (node.kind === "status") this.put({
+            ...node, title: "Withdrawn", text: "", failed: false,
+            blocked: false, warning: false, recoverable: false, recovery: undefined
+          });
+        }
+        this.activeTurns.delete(event.turn_id);
+        this.activities.delete(event.turn_id);
+        this.touch();
         break;
       case "output.delta":
         this.setActivity(event.turn_id, "Responding...");

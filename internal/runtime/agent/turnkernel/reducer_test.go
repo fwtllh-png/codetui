@@ -557,6 +557,31 @@ func TestMutationInvalidatesCompletionAndVerification(t *testing.T) {
 	}
 }
 
+func TestRecoveredToolFailureDoesNotBlockCapturedText(t *testing.T) {
+	state := startSampling(t, protocol.TurnIntentAnswer)
+	state = apply(t, state, ToolCallsProposed{
+		Calls: []ToolCallState{{ID: "fail-1", Name: "exec_command"}},
+	}).State
+	state = apply(t, state, ToolResultReceived{
+		CallID: "fail-1", IsError: true,
+	}).State
+	state = apply(t, state, ToolCallsProposed{
+		Calls: []ToolCallState{{ID: "ok-1", Name: "exec_command"}},
+	}).State
+	state = apply(t, state, ToolResultReceived{CallID: "ok-1"}).State
+	state.ProvisionalOutput = []string{"matrix templates and how to think about them"}
+	if !state.UnresolvedToolFailure || !state.RecoveryToolSucceeded {
+		t.Fatalf("expected recovered failure: %+v", state)
+	}
+
+	transition := apply(t, state, EvaluateTurnStep{ProgressKey: "recovered"})
+	if transition.State.NextAction != StepActionComplete ||
+		transition.State.UnresolvedToolFailure ||
+		transition.State.RecoveryToolSucceeded {
+		t.Fatalf("recovered failure still repaired: %+v", transition.State)
+	}
+}
+
 func TestToolAssistedReadOnlyTurnCompletesFromCapturedText(t *testing.T) {
 	state := startSampling(t, protocol.TurnIntentAnswer)
 	state = apply(t, state, ToolCallsProposed{

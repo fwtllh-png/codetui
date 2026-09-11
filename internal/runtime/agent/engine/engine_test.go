@@ -756,7 +756,7 @@ func TestEngineRepairsInterruptedPostToolNarrationBeforeCompletion(t *testing.T)
 	}
 }
 
-func TestEngineRepairsNarrationAfterStructuredToolFailure(t *testing.T) {
+func TestEnginePublishesAnswerAfterRecoveredToolFailure(t *testing.T) {
 	runtime := &scriptedProvider{streams: []provider.Stream{
 		&providerfixture.SliceStream{Events: []provider.StreamEvent{
 			{Type: provider.EventToolCallDelta, ToolCall: &provider.ToolCallFragment{
@@ -764,7 +764,6 @@ func TestEngineRepairsNarrationAfterStructuredToolFailure(t *testing.T) {
 			}},
 			{Type: provider.EventMessageStop, StopReason: provider.StopReasonToolUse},
 		}},
-		textStream("小笔误，修正后重跑："),
 		&providerfixture.SliceStream{Events: []provider.StreamEvent{
 			{Type: provider.EventToolCallDelta, ToolCall: &provider.ToolCallFragment{
 				Index: 0, ID: "call_2", Name: "echo", Arguments: `{"text":"fixed"}`,
@@ -785,19 +784,13 @@ func TestEngineRepairsNarrationAfterStructuredToolFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	if result.Text != "最终结论：修正后的检查已通过。" ||
-		len(result.Tools) != 2 || len(runtime.requests) != 4 {
+		len(result.Tools) != 2 || len(runtime.requests) != 3 {
 		t.Fatalf("result=%+v requests=%d", result, len(runtime.requests))
 	}
-	var foundFeedback bool
-	for _, message := range runtime.requests[2].Messages {
-		if message.Role == provider.RoleUser &&
-			strings.Contains(message.Text(), "[tool_failure_resolution_required]") {
-			foundFeedback = true
-			break
+	for index, request := range runtime.requests {
+		if requestContains(request, "[tool_failure_resolution_required]") {
+			t.Fatalf("recovered failure still repaired at request %d", index)
 		}
-	}
-	if !foundFeedback {
-		t.Fatalf("tool failure feedback missing from request: %+v", runtime.requests[2].Messages)
 	}
 }
 
@@ -840,7 +833,7 @@ func TestEngineDoesNotClearToolFailureWithTextOnlyPromises(t *testing.T) {
 	}
 }
 
-func TestEngineRetainsFailureUntilPostRecoveryCompletionCheck(t *testing.T) {
+func TestEngineCompletesRecoveredFailureFromCapturedText(t *testing.T) {
 	runtime := &scriptedProvider{streams: []provider.Stream{
 		&providerfixture.SliceStream{Events: []provider.StreamEvent{
 			{Type: provider.EventToolCallDelta, ToolCall: &provider.ToolCallFragment{
@@ -851,13 +844,6 @@ func TestEngineRetainsFailureUntilPostRecoveryCompletionCheck(t *testing.T) {
 		&providerfixture.SliceStream{Events: []provider.StreamEvent{
 			{Type: provider.EventToolCallDelta, ToolCall: &provider.ToolCallFragment{
 				Index: 0, ID: "call_2", Name: "echo", Arguments: `{"text":"recovered"}`,
-			}},
-			{Type: provider.EventMessageStop, StopReason: provider.StopReasonToolUse},
-		}},
-		textStream("与预期有出入，直接精确核实："),
-		&providerfixture.SliceStream{Events: []provider.StreamEvent{
-			{Type: provider.EventToolCallDelta, ToolCall: &provider.ToolCallFragment{
-				Index: 0, ID: "call_3", Name: "echo", Arguments: `{"text":"verified"}`,
 			}},
 			{Type: provider.EventMessageStop, StopReason: provider.StopReasonToolUse},
 		}},
@@ -877,19 +863,13 @@ func TestEngineRetainsFailureUntilPostRecoveryCompletionCheck(t *testing.T) {
 		t.Fatal(err)
 	}
 	if result.Text != "最终结论：恢复和核实均已完成。" ||
-		len(result.Tools) != 3 || len(runtime.requests) != 5 {
+		len(result.Tools) != 2 || len(runtime.requests) != 3 {
 		t.Fatalf("result=%+v requests=%d", result, len(runtime.requests))
 	}
-	var foundFeedback bool
-	for _, message := range runtime.requests[3].Messages {
-		if message.Role == provider.RoleUser &&
-			strings.Contains(message.Text(), "[tool_failure_resolution_required]") {
-			foundFeedback = true
-			break
+	for index, request := range runtime.requests {
+		if requestContains(request, "[tool_failure_resolution_required]") {
+			t.Fatalf("recovered failure still repaired at request %d", index)
 		}
-	}
-	if !foundFeedback {
-		t.Fatalf("tool failure feedback missing from request: %+v", runtime.requests[3].Messages)
 	}
 }
 
@@ -901,28 +881,24 @@ func TestEngineResetsCompletionRepairBudgetAfterToolProgress(t *testing.T) {
 			}},
 			{Type: provider.EventMessageStop, StopReason: provider.StopReasonToolUse},
 		}},
-		textStream("I will retry the first failed check."),
 		&providerfixture.SliceStream{Events: []provider.StreamEvent{
 			{Type: provider.EventToolCallDelta, ToolCall: &provider.ToolCallFragment{
 				Index: 0, ID: "call_2", Name: "echo", Arguments: `{"text":"first recovered"}`,
 			}},
 			{Type: provider.EventMessageStop, StopReason: provider.StopReasonToolUse},
 		}},
-		textStream("I will verify the first recovery."),
 		&providerfixture.SliceStream{Events: []provider.StreamEvent{
 			{Type: provider.EventToolCallDelta, ToolCall: &provider.ToolCallFragment{
 				Index: 0, ID: "call_3", Name: "result_error", Arguments: `{}`,
 			}},
 			{Type: provider.EventMessageStop, StopReason: provider.StopReasonToolUse},
 		}},
-		textStream("I will retry the second failed check."),
 		&providerfixture.SliceStream{Events: []provider.StreamEvent{
 			{Type: provider.EventToolCallDelta, ToolCall: &provider.ToolCallFragment{
 				Index: 0, ID: "call_4", Name: "echo", Arguments: `{"text":"second recovered"}`,
 			}},
 			{Type: provider.EventMessageStop, StopReason: provider.StopReasonToolUse},
 		}},
-		textStream("I will verify the second recovery."),
 		textStream("Final result: both independent failures were recovered."),
 	}}
 	registry := tool.NewRegistry(nil, nil)
@@ -942,7 +918,7 @@ func TestEngineResetsCompletionRepairBudgetAfterToolProgress(t *testing.T) {
 		t.Fatal(err)
 	}
 	if result.Text != "Final result: both independent failures were recovered." ||
-		len(result.Tools) != 4 || len(runtime.requests) != 9 {
+		len(result.Tools) != 4 || len(runtime.requests) != 5 {
 		t.Fatalf("result=%+v requests=%d", result, len(runtime.requests))
 	}
 }

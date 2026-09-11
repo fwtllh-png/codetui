@@ -33,6 +33,97 @@ func newRuntimeWithRecovery(
 	return runtime, nil
 }
 
+// A turn interrupted after live commentary used to stamp its terminal outbox
+// with the cancel operation identity while the live commentary event kept the
+// start operation identity. Recovery must treat that pair as the same logical
+// event, drain the outbox, and publish the terminal instead of wedging
+// startup with an identity conflict.
+func TestC5RuntimeRecoversOutboxWithDriftedOperationIdentity(t *testing.T) {
+	envelope := c5TerminalEnvelope(t)
+	commentaryData := protocol.CommentaryCompletedData{
+		MessageID: envelope.TurnID + "/commentary/turn-1-step-1",
+		SampleID:  "turn-1-step-1",
+		Text:      "checking the workspace first",
+		CallIDs:   []string{"call_block"},
+	}
+	commentaryPayload, err := json.Marshal(&commentaryData)
+	if err != nil {
+		t.Fatal(err)
+	}
+	commentaryEventID := eventhub.CommentaryEventID(commentaryData.MessageID)
+	commentary := turnkernel.ProjectionOutboxEntry{
+		ID:      "commentary:turn-1-step-1",
+		EventID: commentaryEventID,
+		ThreadID: protocol.ThreadID(envelope.Outbox[0].ThreadID),
+		TurnID:   protocol.TurnID(envelope.TurnID),
+		Kind:     string(protocol.EventCommentaryCompleted),
+		Payload:  commentaryPayload,
+	}
+	drifted := append(
+		[]turnkernel.ProjectionOutboxEntry{commentary},
+		envelope.Outbox...,
+	)
+	for index := range drifted {
+		drifted[index].OperationID = protocol.OperationID(
+			"operation-c5-recovery-cancel",
+		)
+		drifted[index].ItemID = protocol.ItemID("item-c5-recovery-cancel")
+	}
+	envelope.Outbox = drifted
+
+	terminalStore := turnkernel.NewMemoryTerminalEnvelopeStore(nil, nil)
+	if _, err := terminalStore.CommitTerminal(t.Context(), envelope); err != nil {
+		t.Fatal(err)
+	}
+	eventStore := NewMemoryEventStore(16)
+	live, err := protocol.NewEventWithIdentity(
+		protocol.EventMeta{
+			Sequence:    1,
+			OperationID: protocol.OperationID("operation-c5-recovery"),
+			ThreadID:    drifted[0].ThreadID,
+			TurnID:      drifted[0].TurnID,
+			ItemID:      protocol.ItemID("item-c5-recovery"),
+		},
+		commentaryEventID,
+		time.Unix(1, 0),
+		&commentaryData,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := eventStore.Append(t.Context(), live); err != nil {
+		t.Fatal(err)
+	}
+
+	runtime, err := newRuntimeWithRecovery(t.Context(), Options{
+		EventStore:    eventStore,
+		TerminalStore: terminalStore,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = runtime.Close(context.Background()) })
+
+	events, err := eventStore.Replay(t.Context(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 3 ||
+		events[0].ID != commentaryEventID ||
+		events[0].OperationID != live.OperationID ||
+		events[1].Kind != protocol.EventExecutionReceipt ||
+		events[2].Kind != protocol.EventTurnCompleted {
+		t.Fatalf("recovered events = %+v", events)
+	}
+	pending, err := terminalStore.PendingOutbox(t.Context(), envelope.TurnID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 0 {
+		t.Fatalf("pending terminal outbox = %+v", pending)
+	}
+}
+
 func TestC5RuntimeRecoversTerminalOutboxWithoutDuplicateEvent(t *testing.T) {
 	envelope := c5TerminalEnvelope(t)
 	terminalStore := &c5AtomicTerminalStore{

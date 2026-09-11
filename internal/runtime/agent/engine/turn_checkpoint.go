@@ -5,9 +5,11 @@ import (
 	"strings"
 
 	"github.com/fwtllh-png/QCode/internal/adapter/provider"
+	"github.com/fwtllh-png/QCode/internal/adapter/tool"
 	"github.com/fwtllh-png/QCode/internal/adapter/tool/interact"
 	turnhistory "github.com/fwtllh-png/QCode/internal/adapter/tool/turnhistory"
 	agentcontext "github.com/fwtllh-png/QCode/internal/runtime/agent/context"
+	"github.com/fwtllh-png/QCode/internal/runtime/protocol"
 )
 
 func (e *Engine) registerTurnHistoryTool() error {
@@ -42,6 +44,13 @@ func (e *Engine) lookupArchivedTurn(
 	archive, turnID := e.turnArchiveSource(turn)
 	if archive == nil || turnID == "" {
 		return nil, nil
+	}
+	if store := e.options.TurnContexts; store != nil {
+		thread := tool.InvocationIdentityFrom(ctx).ThreadID
+		withdrawn, err := store.TurnWithdrawn(ctx, protocol.ThreadID(thread), protocol.TurnID(turnID))
+		if err != nil || withdrawn {
+			return nil, err
+		}
 	}
 	history, err := archive.LookupTurn(ctx, turnID)
 	if err != nil {

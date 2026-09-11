@@ -646,6 +646,14 @@ func (m *ThreadManager) ContextSnapshot(
 	return engine.ExportContextSnapshot()
 }
 
+func (m *ThreadManager) WithdrawTurn(ctx context.Context, threadID protocol.ThreadID, turnID protocol.TurnID) error {
+	adapter, err := m.forThread(threadID)
+	if err != nil {
+		return err
+	}
+	return adapter.Underlying().WithdrawTurn(ctx, threadID, turnID)
+}
+
 func (m *ThreadManager) PreparePostTurnNarrative(
 	threadID protocol.ThreadID,
 	turnID protocol.TurnID,

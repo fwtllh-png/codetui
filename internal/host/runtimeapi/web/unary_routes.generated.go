@@ -98,6 +98,8 @@ func unaryRouteHandler(path string) (unaryHandler, bool) {
 		return (*Server).turnQueue, true
 	case "turn/recover":
 		return (*Server).turnRecover, true
+	case "turn/withdraw":
+		return (*Server).turnWithdraw, true
 	case "usage/query":
 		return (*Server).usageQuery, true
 	case "workspace/add":

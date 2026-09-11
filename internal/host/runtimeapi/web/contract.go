@@ -78,6 +78,7 @@ var unaryRouteContracts = []RouteContract{
 	rpc("checkpoint/restore", "checkpoint_identity", "checkpoint_restore", true, true),
 	rpc("checkpoint/fork", "checkpoint_fork", "checkpoint_fork_result", true, true),
 	rpc("turn/recover", "turn_recover", "operation_receipt", true, true),
+	rpc("turn/withdraw", "turn_withdraw", "empty", true, true),
 	rpc("turn/queue", "session_identity", "turn_queue", false, false),
 	rpc("plan/get", "session_identity", "session_plan", false, false),
 	rpc("agent/list", "agent_query", "agent_list", false, false),

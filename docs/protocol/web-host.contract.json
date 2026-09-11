@@ -515,6 +515,16 @@
       "requires_capability": true
     },
     {
+      "path": "/api/v1/turn/withdraw",
+      "method": "POST",
+      "request": "turn_withdraw",
+      "response": "empty",
+      "mutation": true,
+      "idempotency_key": true,
+      "requires_runtime": true,
+      "requires_capability": true
+    },
+    {
       "path": "/api/v1/usage/query",
       "method": "POST",
       "request": "usage_query",

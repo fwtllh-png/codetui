@@ -100,6 +100,7 @@ type SessionSummary struct {
 	ExecutionTarget  string                 `json:"execution_target"`
 	ParentThreadID   ThreadID               `json:"parent_thread_id,omitempty"`
 	LatestTurnID     TurnID                 `json:"latest_turn_id,omitempty"`
+	LatestTurnWithdrawn bool               `json:"latest_turn_withdrawn,omitempty"`
 	LatestSequence   Cursor                 `json:"latest_sequence"`
 	PendingApprovals int                    `json:"pending_approvals"`
 	PendingInputs    int                    `json:"pending_inputs"`

@@ -58,6 +58,7 @@ import {IconButton} from "./primitives/IconButton";
 import {Skeleton} from "./primitives/Skeleton";
 import {useMediaQuery} from "./primitives/useMediaQuery";
 import {useModalFocus} from "./primitives/useModalFocus";
+import {TurnWithdrawalAction} from "./TurnWithdrawalAction";
 import {Presence} from "./primitives/Presence";
 import {useMotionEnabled} from "./primitives/motion";
 import {usePresentationEvents} from "./usePresentationEvents";
@@ -363,8 +364,8 @@ export function App({client}: Props) {
     () => terminalTurnKinds(presentationEvents),
     [presentationEvents]
   );
-  const resumableTurnID = selected?.status === "blocked" ||
-      selected?.status === "interrupted"
+  const resumableTurnID = !selected?.latest_turn_withdrawn &&
+      (selected?.status === "blocked" || selected?.status === "interrupted")
     ? selected.latest_turn_id
     : "";
   const windowEndIndex = !atBottom && transcriptWindowEndID
@@ -1856,6 +1857,8 @@ export function App({client}: Props) {
                   onInspect={inspectTool}
                   checkpoints={snapshot.checkpoints}
                   recoveryTurnID={resumableTurnID}
+                  canWithdraw={selected?.latest_turn_id === turn.turnID && !selected.latest_turn_withdrawn}
+                  withdrawalCommitted={selected?.latest_turn_id === turn.turnID && selected.latest_turn_withdrawn}
                   chrome={turnChrome.get(turn.turnID)}
                   messageFeedback={snapshot.messageFeedback}
                   selectedSessionID={snapshot.selectedSessionID}
@@ -2690,6 +2693,8 @@ function TurnTranscript({
   onInspect,
   checkpoints,
   recoveryTurnID,
+  canWithdraw,
+  withdrawalCommitted,
   chrome,
   messageFeedback,
   selectedSessionID,
@@ -2703,6 +2708,8 @@ function TurnTranscript({
   onInspect: (callID: string) => void;
   checkpoints: readonly SessionCheckpoint[];
   recoveryTurnID?: string;
+  canWithdraw?: boolean;
+  withdrawalCommitted?: boolean;
   chrome?: MessageChrome;
   messageFeedback: RuntimeSnapshot["messageFeedback"];
   selectedSessionID: string;
@@ -2721,20 +2728,34 @@ function TurnTranscript({
     revealEntryID && executionEntries.some((entry) => entry.id === revealEntryID)
   );
   const [executionOpen, setExecutionOpen] = useState(false);
+  const [withdrawnOpen, setWithdrawnOpen] = useState(false);
+  const withdrawn = withdrawalCommitted ||
+    entries.some((entry) => entry.kind === "user" && entry.withdrawn);
+  const requestEntryID = entries.find((entry) => entry.kind === "user" && !entry.steering)?.id;
+  const revealWithdrawn = Boolean(withdrawn && revealEntryID &&
+    entries.some((entry) => entry.id === revealEntryID));
 
   useEffect(() => {
     if (revealExecution) setExecutionOpen(true);
   }, [revealExecution]);
 
+  useEffect(() => {
+    if (revealWithdrawn) setWithdrawnOpen(true);
+  }, [revealWithdrawn, revealEntryID]);
+
   const renderEntry = (entry: ConversationNode) => (
     <TranscriptEntry
       key={entry.id}
-      entry={entry}
+      entry={withdrawn && entry.kind === "status"
+        ? {...entry, recoverable: false, recovery: undefined}
+        : entry}
       client={client}
       onError={onError}
       onInspect={onInspect}
       checkpoint={checkpointForTurn(checkpoints, entry.turnID)}
       recoveryTurnID={recoveryTurnID}
+      canWithdraw={entry.id === requestEntryID && canWithdraw && !withdrawn}
+      withdrawn={entry.id === requestEntryID && withdrawn}
       chrome={chrome}
       feedback={messageFeedback[`${selectedSessionID}:${entry.id}`]}
       navigationHighlightID={navigationHighlightID}
@@ -2743,6 +2764,15 @@ function TurnTranscript({
 
   return (
     <section className="turnTranscript" data-turn-id={entries[0]?.turnID}>
+      {withdrawn && (
+        <button type="button" className="withdrawnTurnToggle"
+          aria-expanded={withdrawnOpen} onClick={() => setWithdrawnOpen((value) => !value)}>
+          {withdrawnOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+          <span>Turn withdrawn</span>
+          <small>Excluded from context</small>
+        </button>
+      )}
+      {(!withdrawn || withdrawnOpen) && <>
       <ExecutionStages entries={visibleEntries} revealEntryID={revealEntryID} renderEntry={renderEntry} />
       {executionEntries.length > 0 && (
         <div
@@ -2766,6 +2796,7 @@ function TurnTranscript({
           </Collapse>
         </div>
       )}
+      </>}
     </section>
   );
 }
@@ -2777,6 +2808,8 @@ function TranscriptEntry({
   onInspect,
   checkpoint,
   recoveryTurnID,
+  canWithdraw,
+  withdrawn,
   chrome,
   feedback,
   navigationHighlightID
@@ -2787,6 +2820,8 @@ function TranscriptEntry({
   onInspect: (callID: string) => void;
   checkpoint?: SessionCheckpoint;
   recoveryTurnID?: string;
+  canWithdraw?: boolean;
+  withdrawn?: boolean;
   chrome?: MessageChrome;
   feedback?: MessageFeedbackRating;
   navigationHighlightID: string;
@@ -2806,6 +2841,8 @@ function TranscriptEntry({
         onInspect={onInspect}
         checkpoint={checkpoint}
         recoveryTurnID={recoveryTurnID}
+        canWithdraw={canWithdraw}
+        withdrawn={withdrawn}
         chrome={chrome}
         feedback={feedback}
       />
@@ -2820,6 +2857,8 @@ const TranscriptItem = memo(function TranscriptItem({
   onInspect,
   checkpoint,
   recoveryTurnID,
+  canWithdraw,
+  withdrawn,
   chrome,
   feedback
 }: {
@@ -2829,6 +2868,8 @@ const TranscriptItem = memo(function TranscriptItem({
   onInspect: (callID: string) => void;
   checkpoint?: SessionCheckpoint;
   recoveryTurnID?: string;
+  canWithdraw?: boolean;
+  withdrawn?: boolean;
   chrome?: MessageChrome;
   feedback?: MessageFeedbackRating;
 }) {
@@ -2840,24 +2881,31 @@ const TranscriptItem = memo(function TranscriptItem({
   );
   if (entry.kind === "user") {
     return (
-      <div
-        className="userMessage"
-        data-steering={entry.steering || undefined}
-      >
-        {entry.steering && <small>Steered</small>}
-        {entry.images.length > 0 && (
-          <div className="userMessageImages">
-            {entry.images.map((image, index) => (
-              <img
-                src={`data:${image.mediaType};base64,${image.content}`}
-                alt={image.label}
-                loading="lazy"
-                key={`${image.label}:${index}`}
-              />
-            ))}
-          </div>
-        )}
-        {entry.text && <span>{entry.text}</span>}
+      <div className="userMessageGroup">
+        <div
+          className="userMessage"
+          data-steering={entry.steering || undefined}
+        >
+          {entry.steering && <small>Steered</small>}
+          {entry.images.length > 0 && (
+            <div className="userMessageImages">
+              {entry.images.map((image, index) => (
+                <img
+                  src={`data:${image.mediaType};base64,${image.content}`}
+                  alt={image.label}
+                  loading="lazy"
+                  key={`${image.label}:${index}`}
+                />
+              ))}
+            </div>
+          )}
+          {entry.text && <span>{entry.text}</span>}
+        </div>
+        {withdrawn ? (
+          <div className="userMessageActions">Withdrawn</div>
+        ) : canWithdraw ? (
+          <TurnWithdrawalAction client={client} turnID={entry.turnID} />
+        ) : null}
       </div>
     );
   }

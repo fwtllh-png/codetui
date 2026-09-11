@@ -938,12 +938,19 @@ textarea:disabled {
   height: auto;
 }
 
-.workspaceRemovalDialog {
+.workspaceRemovalDialog,
+.contextDialog.confirmationDialog {
   width: min(420px, calc(100vw - 48px));
   height: auto;
 }
 
-.workspaceRemovalMessage {
+.contextDialog.confirmationDialog {
+  max-height: calc(100dvh - 48px);
+  overflow-y: auto;
+}
+
+.workspaceRemovalMessage,
+.confirmationMessage {
   margin: 0;
   padding: 0 20px 20px;
   color: var(--ch-text-secondary);
@@ -951,7 +958,19 @@ textarea:disabled {
   line-height: 20px;
 }
 
-.workspaceRemovalActions {
+.confirmationError {
+  margin: 0 20px 16px;
+  padding: 8px 10px;
+  color: var(--ch-danger);
+  background: var(--ch-danger-soft);
+  border-radius: var(--ch-radius);
+  overflow-wrap: anywhere;
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.workspaceRemovalActions,
+.confirmationActions {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
@@ -959,7 +978,8 @@ textarea:disabled {
   border-top: 1px solid var(--ch-border);
 }
 
-.workspaceRemovalActions button {
+.workspaceRemovalActions button,
+.confirmationActions button {
   display: inline-flex;
   min-height: 34px;
   align-items: center;
@@ -974,6 +994,20 @@ textarea:disabled {
 .workspaceRemovalActions .workspaceRemovalConfirm {
   color: var(--ch-on-accent);
   background: var(--ch-danger);
+  border-color: var(--ch-danger);
+}
+
+.confirmationActions .confirmationDanger {
+  color: var(--ch-danger);
+  background: var(--ch-danger-soft);
+  border-color: color-mix(in srgb, var(--ch-danger) 30%, var(--ch-border));
+}
+
+.confirmationActions button:hover:not(:disabled) {
+  border-color: var(--ch-border-strong);
+}
+
+.confirmationActions .confirmationDanger:hover:not(:disabled) {
   border-color: var(--ch-danger);
 }
 
@@ -1174,10 +1208,19 @@ textarea:disabled {
   background: var(--ch-accent-hover);
 }
 
-.userMessage {
+.userMessageGroup {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
   width: fit-content;
   max-width: min(82%, 525px);
   margin: 0 0 0 auto;
+}
+
+.userMessage {
+  width: fit-content;
+  max-width: 100%;
   padding: 10px 16px;
   overflow-wrap: anywhere;
   font-size: 16px;
@@ -1185,6 +1228,41 @@ textarea:disabled {
   white-space: pre-wrap;
   background: var(--ch-business-soft);
   border-radius: var(--ch-radius-conversation);
+}
+
+.userMessageActions {
+  display: flex;
+  align-items: center;
+  min-height: 28px;
+  color: var(--ch-text-muted);
+  font-size: 12px;
+  line-height: 20px;
+}
+
+.userMessageActions .iconButton {
+  width: 28px;
+  height: 28px;
+  min-height: 28px;
+  background: transparent;
+}
+
+.withdrawnTurnToggle {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  align-self: flex-end;
+  max-width: 100%;
+  gap: 6px;
+  padding: 6px 0;
+  min-height: 32px;
+  color: var(--ch-text-muted);
+  background: transparent;
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.withdrawnTurnToggle small {
+  font-size: 12px;
 }
 
 .userMessage[data-steering] {
@@ -3517,7 +3595,7 @@ textarea:disabled {
     width: 100%;
   }
 
-  .userMessage {
+  .userMessageGroup {
     max-width: 88%;
   }
 

@@ -465,6 +465,17 @@ Terminal Store；Memory Store 仅由显式 `NewRuntime` Ephemeral 构造选择�
 
 Cancel 和 Failure 是明确终态，不是“没有返回数据”。
 
+`turn/withdraw` 是独立的用户上下文操作，仅接受当前 Session 主 Thread 的最近一个
+Turn。Engine 在执行前通过既有 Context Manifest/CAS 保存不可变基线；恢复中的同一
+Turn 不覆盖基线。Runtime 对执行准入加栅栏，停止并等待所属活动 Turn 和 Child Thread
+结算，随后以新 Epoch、Revision 和 Token Window 恢复基线。实际文件变更保留为未验证
+证据，不保留被撤回的 Goal、Plan、摘要或工具恢复句柄。
+撤回使用 `context_rebases` 的稳定提交身份作为 tombstone，与 `context_current` 在同一
+事务提交，不修改原终态或费用。`turn.withdrawn` 只负责 Web 审计投影；即使事件发布失败，
+Session 查询与恢复校验仍以持久 tombstone 为准，重试可以补发同一稳定事件。
+Journal 草稿在上下文提交后按用户确认保留文件并结算；中断后重复撤回或下一 Turn 会
+幂等完成结算。Checkpoint 和 Plan 恢复入口拒绝已撤回来源。
+
 ## 持久化
 
 Durable State 由多个明确组件组合：

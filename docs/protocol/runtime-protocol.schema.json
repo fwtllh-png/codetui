@@ -883,6 +883,7 @@
             "turn.reverted",
             "checkpoint.created",
             "checkpoint.restored",
+            "turn.withdrawn",
             "checkpoint.forked",
             "turn.compaction",
             "agent.spawned",
@@ -1930,6 +1931,9 @@
             "latest_turn_id": {
               "type": "string"
             },
+            "latest_turn_withdrawn": {
+              "type": "boolean"
+            },
             "mode": {
               "type": "string"
             },
@@ -2088,6 +2092,9 @@
               },
               "latest_turn_id": {
                 "type": "string"
+              },
+              "latest_turn_withdrawn": {
+                "type": "boolean"
               },
               "mode": {
                 "type": "string"
@@ -2718,6 +2725,22 @@
         "session_id",
         "source_turn_id",
         "version"
+      ],
+      "additionalProperties": false
+    },
+    "turn_withdraw_request": {
+      "type": "object",
+      "properties": {
+        "session_id": {
+          "type": "string"
+        },
+        "turn_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "session_id",
+        "turn_id"
       ],
       "additionalProperties": false
     }
@@ -8401,6 +8424,10 @@
       ],
       "additionalProperties": false
     },
+    "turn.withdrawn": {
+      "type": "object",
+      "additionalProperties": false
+    },
     "usage": {
       "type": "object",
       "properties": {
@@ -9076,6 +9103,13 @@
       "item_owner": "turn",
       "durability": "retained",
       "correlation": "mutation",
+      "terminal": false
+    },
+    "turn.withdrawn": {
+      "class": "lifecycle",
+      "item_owner": "turn",
+      "durability": "retained",
+      "correlation": "turn",
       "terminal": false
     },
     "usage": {

@@ -269,6 +269,11 @@ func (r *SessionService) ActivateSession(
 	ctx context.Context,
 	request ActivateSessionRequest,
 ) (SessionBinding, error) {
+	r.mutationMu.Lock()
+	defer r.mutationMu.Unlock()
+	if r.OperationService.hasWorkspaceOperation() {
+		return SessionBinding{}, retryableProblem(protocol.CodeConflict, "Workspace context is being changed")
+	}
 	if strings.TrimSpace(request.SessionID) == "" {
 		return SessionBinding{}, runtimeProblem(
 			protocol.CodeInvalidArgument,

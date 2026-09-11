@@ -159,6 +159,7 @@ export interface SessionSummary {
   model?: string;
   mode?: string;
   latest_turn_id?: string;
+  latest_turn_withdrawn?: boolean;
   latest_sequence: Cursor;
   pending_approvals: number;
   pending_inputs: number;

@@ -6,6 +6,10 @@ import "../../../src/ui/styles.css";
 import "../../../src/ui/theme/components.css";
 
 const client = new RuntimeClient();
+const withdrawal = new URLSearchParams(location.search).has("withdrawal");
+// #region debug-point A:withdraw-click
+if (new URLSearchParams(location.search).has("debug-withdrawal")) document.addEventListener("click", (event) => { if ((event.target as Element)?.closest('button[aria-label="Withdraw turn"]')) void fetch("http://127.0.0.1:7777/event", {method: "POST", body: JSON.stringify({sessionId: "turn-withdraw-no-feedback", runId: new URLSearchParams(location.search).get("debug-withdrawal"), hypothesisId: "A", location: "streaming:click", msg: "[DEBUG] Withdrawal clicked", data: {embedded: window.top !== window}, ts: Date.now()})}).catch(() => {}); }, true);
+// #endregion
 const session: SessionSummary = {
   version: 1, revision: 1, session_id: "streaming-fixture", thread_id: "thread",
   title: "Streaming fixture", status: "running", pinned: false, archived: false,
@@ -14,6 +18,7 @@ const session: SessionSummary = {
   changed_files: 0, total_tokens: 0, cost_microunits: 0, cost_known: true,
   created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z"
 };
+if (withdrawal) session.latest_turn_id = "live";
 // Exercise the real event batching and projection without network or durable state.
 Object.assign(client, {
   state: {...client.getSnapshot(), phase: "ready", sessions: [session],
@@ -40,6 +45,20 @@ const emit = (kind: string, data: Record<string, unknown>, turnID = "live") => {
     created_at: "2026-01-01T00:00:00Z", data
   }, session.session_id);
 };
+if (withdrawal) {
+  Object.assign(client, {
+    withdrawTurn: async (turnID: string) => {
+      // #region debug-point B:withdraw-request
+      if (new URLSearchParams(location.search).has("debug-withdrawal")) void fetch("http://127.0.0.1:7777/event", {method: "POST", body: JSON.stringify({sessionId: "turn-withdraw-no-feedback", runId: new URLSearchParams(location.search).get("debug-withdrawal"), hypothesisId: "B", location: "streaming:withdrawTurn", msg: "[DEBUG] Withdrawal request reached client", data: {}, ts: Date.now()})}).catch(() => {});
+      // #endregion
+      emit("turn.canceled", {reason: "user_interrupted"}, turnID);
+      emit("turn.withdrawn", {}, turnID);
+      // #region debug-point C:withdraw-result
+      if (new URLSearchParams(location.search).has("debug-withdrawal")) requestAnimationFrame(() => requestAnimationFrame(() => { void fetch("http://127.0.0.1:7777/event", {method: "POST", body: JSON.stringify({sessionId: "turn-withdraw-no-feedback", runId: new URLSearchParams(location.search).get("debug-withdrawal"), hypothesisId: "C", location: "streaming:projection", msg: "[DEBUG] Withdrawal projection", data: {withdrawn: Boolean(document.querySelector('[data-turn-id="live"] .withdrawnTurnToggle')), promptVisible: Boolean(document.querySelector('[data-turn-id="live"] .userMessage'))}, ts: Date.now()})}).catch(() => {}); }));
+      // #endregion
+    }
+  });
+}
 const paragraph = [
   "A **structured result** with `inline code` and [reference](https://example.test).",
   "",

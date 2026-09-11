@@ -43,6 +43,45 @@ func (e *Engine) Execute(
 	if err != nil {
 		return Result{}, err
 	}
+	if e.options.TurnContexts != nil {
+		// Admission must survive an immediate Stop: the accepted request still
+		// needs its baseline before the canceled Scope publishes a terminal.
+		baselineContext := context.WithoutCancel(ctx)
+		threadID := protocol.ThreadID(spec.Identity.ThreadID)
+		turnID := protocol.TurnID(spec.Identity.TurnID)
+		if e.journal != nil {
+			for _, draft := range e.journal.DraftTurnIDs() {
+				withdrawn, checkErr := e.options.TurnContexts.TurnWithdrawn(baselineContext, threadID, protocol.TurnID(draft))
+				if checkErr != nil {
+					return Result{}, checkErr
+				}
+				if withdrawn {
+					if keepErr := e.keepWithdrawnDraft(draft); keepErr != nil {
+						return Result{}, keepErr
+					}
+				}
+			}
+		}
+		withdrawn, checkErr := e.options.TurnContexts.TurnWithdrawn(baselineContext, threadID, turnID)
+		if checkErr != nil {
+			return Result{}, checkErr
+		}
+		if withdrawn {
+			return Result{}, protocol.NewProblem(protocol.CodeConflict, "Turn was withdrawn", false, nil)
+		}
+		if _, found, loadErr := e.options.TurnContexts.TurnBaseline(baselineContext, threadID, turnID); loadErr != nil {
+			return Result{}, loadErr
+		} else if !found {
+			baseline, snapshotErr := e.buildContextSnapshot(e.history, e.context.Compaction(),
+				max(uint64(1), e.sessionRevision), max(uint64(1), e.stateEpoch))
+			if snapshotErr != nil {
+				return Result{}, snapshotErr
+			}
+			if saveErr := e.options.TurnContexts.SaveTurnBaseline(baselineContext, threadID, turnID, baseline); saveErr != nil {
+				return Result{}, saveErr
+			}
+		}
+	}
 	factory := scopeFactory{
 		engine: e, emit: emit, persistedTurnID: persistedTurnID,
 	}

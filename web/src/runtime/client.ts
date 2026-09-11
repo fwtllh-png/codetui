@@ -188,6 +188,7 @@ const immediateEventKinds = new Set([
   "turn.completed",
   "turn.failed",
   "turn.canceled",
+  "turn.withdrawn",
   "turn.receipt"
 ]);
 
@@ -208,7 +209,8 @@ const sessionActivityEventKinds = new Set([
   "turn.started",
   "turn.completed",
   "turn.failed",
-  "turn.canceled"
+  "turn.canceled",
+  "turn.withdrawn"
 ]);
 
 export class RuntimeClient {
@@ -956,6 +958,19 @@ export class RuntimeClient {
       idempotency_key: crypto.randomUUID(),
       payload: {turn_id: turnID, reason: "user_interrupted"}
     });
+  }
+
+  async withdrawTurn(turnID: string): Promise<void> {
+    const sessionID = this.requireSession();
+    const workspaceID = this.workspaceIDForSession(sessionID);
+    await this.call("turn/withdraw", {
+      session_id: sessionID,
+      turn_id: turnID
+    }, {workspaceID});
+    await this.refreshSessions();
+    if (this.state.selectedSessionID === sessionID) {
+      await this.selectSession(sessionID);
+    }
   }
 
   async steer(turnID: string, prompt: string): Promise<OperationReceipt> {

@@ -112,6 +112,7 @@ type LifecycleConfig struct {
 	// restarted process can rebuild the in-turn context that never reached a
 	// terminal SessionDelta. Nil disables durable continuation.
 	TurnContinuations agentcontext.BlobStore
+	TurnContexts      agentcontext.TurnContextStore
 }
 
 type Options struct {

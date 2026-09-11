@@ -52,6 +52,87 @@ describe("selectionRange", () => {
 });
 
 describe("projectTranscript", () => {
+  it("withdraws only the latest turn after confirmation", async () => {
+    const value = snapshot([
+      {...event(1, "turn.started", {prompt: "previous"}), turn_id: "previous"},
+      {...event(2, "turn.completed", {text: "done"}), turn_id: "previous"},
+      event(3, "turn.started", {prompt: "mistaken request"}),
+      event(4, "turn.canceled", {reason: "user_interrupted"})
+    ]);
+    value.sessions = [{...value.sessions[0], latest_turn_id: "turn"}];
+    const client = mockClient(value);
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    render(<App client={client} />);
+    expect(screen.getAllByRole("button", {name: "Withdraw turn"})).toHaveLength(1);
+    const request = screen.getByText("mistaken request").closest(".userMessageGroup");
+    expect(request).not.toBeNull();
+    expect(within(request as HTMLElement).getByRole("button", {name: "Withdraw turn"})).toBeTruthy();
+    expect(screen.getByText("previous").closest(".userMessageGroup")?.querySelector("button")).toBeNull();
+    fireEvent.click(screen.getByRole("button", {name: "Withdraw turn"}));
+    expect(client.withdrawTurn).not.toHaveBeenCalled();
+    expect(screen.getByRole("alertdialog", {name: "Withdraw this turn?"})).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", {name: "Cancel"}));
+    expect(screen.queryByRole("alertdialog", {name: "Withdraw this turn?"})).toBeNull();
+    fireEvent.click(screen.getByRole("button", {name: "Withdraw turn"}));
+    fireEvent.click(screen.getByRole("button", {name: "Withdraw"}));
+    await waitFor(() => expect(client.withdrawTurn).toHaveBeenCalledWith("turn"));
+    expect(confirm).not.toHaveBeenCalled();
+  });
+
+  it("collapses withdrawn history with an expandable audit and no recovery actions", () => {
+    const value = snapshot([
+      event(1, "turn.started", {prompt: "mistaken request"}),
+      event(2, "turn.canceled", {reason: "user_interrupted"}),
+      event(3, "turn.withdrawn", {})
+    ]);
+    value.sessions = [{...value.sessions[0], latest_turn_id: "turn", latest_turn_withdrawn: true}];
+    render(<App client={mockClient(value)} />);
+    expect(screen.queryByText("mistaken request")).toBeNull();
+    const audit = screen.getByRole("button", {name: "Turn withdrawn Excluded from context"});
+    expect(audit.getAttribute("aria-expanded")).toBe("false");
+    fireEvent.click(audit);
+    expect(screen.getByText("mistaken request")).toBeTruthy();
+    expect(screen.getByText("mistaken request").closest(".userMessageGroup")?.textContent)
+      .toContain("Withdrawn");
+    expect(screen.queryByRole("button", {name: "Withdraw turn"})).toBeNull();
+    expect(screen.queryByRole("button", {name: "Retry"})).toBeNull();
+    expect(screen.queryByRole("button", {name: "Continue"})).toBeNull();
+  });
+
+  it("keeps the confirmation open on failure and allows retry without hiding history", async () => {
+    const value = snapshot([event(1, "turn.started", {prompt: "mistaken request"})]);
+    value.sessions = [{...value.sessions[0], latest_turn_id: "turn"}];
+    const client = mockClient(value);
+    vi.mocked(client.withdrawTurn).mockRejectedValueOnce(new Error("No saved pre-Turn context"));
+    render(<App client={client} />);
+    fireEvent.click(screen.getByRole("button", {name: "Withdraw turn"}));
+    fireEvent.click(screen.getByRole("button", {name: "Withdraw"}));
+    const failure = await screen.findByRole("alert");
+    expect(failure.textContent).toContain("No saved pre-Turn context");
+    expect(failure.closest('[role="alertdialog"]')).toBeTruthy();
+    expect(screen.getByText("mistaken request")).toBeTruthy();
+    expect(screen.queryByText("Turn withdrawn")).toBeNull();
+    fireEvent.click(screen.getByRole("button", {name: "Withdraw"}));
+    await waitFor(() => expect(client.withdrawTurn).toHaveBeenCalledTimes(2));
+  });
+
+  it("keeps withdrawal pending until the request settles and prevents duplicate confirmation", async () => {
+    const value = snapshot([event(1, "turn.started", {prompt: "mistaken request"})]);
+    value.sessions = [{...value.sessions[0], latest_turn_id: "turn"}];
+    const client = mockClient(value);
+    let finish!: () => void;
+    vi.mocked(client.withdrawTurn).mockImplementation(() => new Promise<void>((resolve) => { finish = resolve; }));
+    render(<App client={client} />);
+    fireEvent.click(screen.getByRole("button", {name: "Withdraw turn"}));
+    fireEvent.click(screen.getByRole("button", {name: "Withdraw"}));
+    const pending = screen.getByRole("button", {name: "Withdrawing..."}) as HTMLButtonElement;
+    expect(pending.disabled).toBe(true);
+    fireEvent.click(pending);
+    expect(client.withdrawTurn).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText("Turn withdrawn")).toBeNull();
+    await act(async () => finish());
+  });
+
   it("reconciles streamed output with the authoritative terminal text", () => {
     const entries = projectTranscript([
       event(1, "output.delta", {text: "draft"}),
@@ -3007,6 +3088,7 @@ async function openContextDetails(): Promise<void> {
 
 function mockClient(value: RuntimeSnapshot): RuntimeClient {
   return {
+    withdrawTurn: vi.fn(async () => {}),
     subscribe: () => () => {},
     getSnapshot: () => value,
     start: vi.fn(async () => {}),

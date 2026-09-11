@@ -775,6 +775,165 @@ func TestRuntimeCancelDuringProviderAndToolHasOneCanceledTerminal(
 	}
 }
 
+type runtimeCommentaryCancelProvider struct{}
+
+func (*runtimeCommentaryCancelProvider) Stream(
+	context.Context,
+	provider.ModelRequest,
+) (provider.Stream, error) {
+	return &providerfixture.SliceStream{Events: []provider.StreamEvent{
+		{Type: provider.EventTextDelta, Text: "checking the workspace first"},
+		{
+			Type: provider.EventToolCallDelta,
+			ToolCall: &provider.ToolCallFragment{
+				Index: 0,
+				ID:    "call_block",
+				Name:  "blocking_tool",
+			},
+		},
+		{Type: provider.EventMessageStop},
+	}}, nil
+}
+
+// A turn interrupted after live commentary is the cancel path where the
+// terminal outbox re-projects events that were already published. The
+// projection must dedupe against those live events and still land the
+// canceled terminal, otherwise the turn row stays active forever and every
+// later control operation is rejected with "turn is not active".
+func TestRuntimeCancelAfterLiveCommentaryDrainsTerminalOutbox(t *testing.T) {
+	started := make(chan struct{})
+	terminalStore := turnkernel.NewMemoryTerminalEnvelopeStore(nil, nil)
+	coordinators, err := turnkernel.NewStoreCoordinatorRuntime(terminalStore)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := tool.NewRegistry(nil, nil)
+	if err := registry.Register(&runtimeBlockingTool{started: started}); err != nil {
+		t.Fatal(err)
+	}
+	worker, err := newTestAgentEngine(agentengine.Options{
+		ProviderConfig: agentengine.ProviderConfig{
+			Provider:      &runtimeCommentaryCancelProvider{},
+			Route:         runtimeTestRoute(t),
+			MaxOutputTokens: 128,
+		},
+		ToolConfig:     agentengine.ToolConfig{Tools: registry},
+		SecurityConfig: agentengine.SecurityConfig{
+			Security:  policy.DefaultRuntime(policy.ModeAct, policy.PermissionBypass),
+			Workspace: t.TempDir(),
+		},
+		TelemetryConfig: agentengine.TelemetryConfig{Metrics: telemetry.NewMetrics()},
+		LifecycleConfig: agentengine.LifecycleConfig{TurnCoordinatorRuntime: coordinators},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventStore := NewMemoryEventStore(64)
+	runtime := NewRuntime(Options{
+		Engine:        AdaptEngine(worker),
+		EventStore:    eventStore,
+		TerminalStore: terminalStore,
+	})
+	t.Cleanup(func() { _ = runtime.Close(context.Background()) })
+	events, err := runtime.Events(t.Context(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	turnID := protocol.TurnID("turn-cancel-commentary")
+	start, err := protocol.NewOperation(&protocol.StartTurnPayload{
+		ThreadID: protocol.ThreadID("thread-cancel-commentary"),
+		TurnID:   turnID,
+		ItemID:   protocol.ItemID("item-cancel-commentary"),
+		Prompt:   "wait",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.Submit(t.Context(), start); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("cancel target did not start")
+	}
+	deadline := time.After(3 * time.Second)
+	for {
+		select {
+		case event := <-events:
+			if protocol.IsTerminalEvent(event.Kind) {
+				t.Fatalf("terminal before cancel: %+v", event)
+			}
+			if event.Kind == protocol.EventCommentaryCompleted {
+				goto commentary
+			}
+		case <-deadline:
+			t.Fatal("live commentary was not published before cancel")
+		}
+	}
+commentary:
+	cancel, err := protocol.NewOperation(&protocol.CancelTurnPayload{
+		ThreadID: start.Payload.(*protocol.StartTurnPayload).ThreadID,
+		TurnID:   turnID,
+		ItemID:   protocol.ItemID("item-cancel-commentary-op"),
+		Reason:   protocol.CancelReasonUserInterrupted,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.Submit(t.Context(), cancel); err != nil {
+		t.Fatal(err)
+	}
+	deadline = time.After(3 * time.Second)
+	for {
+		select {
+		case event := <-events:
+			if !protocol.IsTerminalEvent(event.Kind) {
+				continue
+			}
+			if event.Kind != protocol.EventTurnCanceled {
+				t.Fatalf("terminal = %+v", event)
+			}
+			if event.OperationID != start.ID {
+				t.Fatalf(
+					"terminal operation = %s, want the start operation %s",
+					event.OperationID, start.ID,
+				)
+			}
+			goto terminal
+		case <-deadline:
+			t.Fatal("cancel did not produce terminal")
+		}
+	}
+terminal:
+	replayed, err := eventStore.Replay(t.Context(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	terminals, commentaries := 0, 0
+	for _, event := range replayed {
+		switch event.Kind {
+		case protocol.EventTurnCanceled:
+			terminals++
+		case protocol.EventCommentaryCompleted:
+			commentaries++
+		}
+	}
+	if terminals != 1 {
+		t.Fatalf("terminal events = %d: %+v", terminals, replayed)
+	}
+	if commentaries != 1 {
+		t.Fatalf("commentary events = %d: %+v", commentaries, replayed)
+	}
+	pending, err := terminalStore.PendingOutbox(t.Context(), string(turnID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 0 {
+		t.Fatalf("pending terminal outbox = %+v", pending)
+	}
+}
+
 type runtimeWriteTool struct{ calls atomic.Int32 }
 
 func (*runtimeWriteTool) Descriptor() tool.Descriptor {

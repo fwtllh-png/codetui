@@ -19,22 +19,6 @@ func (r *Runtime) TerminalOperationReceipt(
 	return r.OperationService.operationCommitReceipt(operationID)
 }
 
-func (r *Runtime) TerminalProjectionIdentity(
-	turnID protocol.TurnID,
-	operationID protocol.OperationID,
-	itemID protocol.ItemID,
-) (protocol.OperationID, protocol.ItemID) {
-	if stored, ok := r.active.LookupTurn(turnID); ok {
-		if stored.OperationID != "" {
-			operationID = stored.OperationID
-		}
-		if stored.ItemID != "" {
-			itemID = stored.ItemID
-		}
-	}
-	return operationID, itemID
-}
-
 func (r *Runtime) TerminalStore() turnkernel.TerminalEnvelopeStore {
 	return r.terminalStore
 }
@@ -72,10 +56,13 @@ func (r *Runtime) PublishTerminalProjection(
 		TurnID:      entry.TurnID,
 		ItemID:      entry.ItemID,
 	}, entry.EventID, data, func(event protocol.Event) error {
-		if event.OperationID != entry.OperationID ||
-			event.ThreadID != entry.ThreadID ||
+		// Stable events are content-addressed by turn, so thread, turn, and
+		// kind identify the same logical event across re-projection. Operation
+		// and item identity may legitimately drift when the envelope was
+		// committed under a later operation than the live emission; the stored
+		// event keeps its original attribution either way.
+		if event.ThreadID != entry.ThreadID ||
 			event.TurnID != entry.TurnID ||
-			event.ItemID != entry.ItemID ||
 			string(event.Kind) != entry.Kind {
 			return runtimeProblem(
 				protocol.CodeConflict,

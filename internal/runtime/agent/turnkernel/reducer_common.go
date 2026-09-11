@@ -21,6 +21,12 @@ func applyEvaluateTurnStep(
 		return illegal(current, command, "turn step progress key is empty")
 	}
 	transition.State.NextAction = StepActionNone
+	if current.UnresolvedToolFailure && current.RecoveryToolSucceeded {
+		transition.State.UnresolvedToolFailure = false
+		transition.State.RecoveryToolSucceeded = false
+		current.UnresolvedToolFailure = false
+		current.RecoveryToolSucceeded = false
+	}
 	spend := func(kind RepairKind, limit uint32, action StepAction) error {
 		if limit == 0 {
 			beginConvergence(transition, ConvergenceRequested{

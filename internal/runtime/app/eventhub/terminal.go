@@ -20,11 +20,6 @@ type TerminalContentStore interface {
 type TerminalRuntime interface {
 	TerminalContent() TerminalContentStore
 	TerminalOperationReceipt(protocol.OperationID) any
-	TerminalProjectionIdentity(
-		protocol.TurnID,
-		protocol.OperationID,
-		protocol.ItemID,
-	) (protocol.OperationID, protocol.ItemID)
 	TerminalStore() turnkernel.TerminalEnvelopeStore
 	DurableTerminal() bool
 	LoadContextManifest(
@@ -107,12 +102,12 @@ func (p *TerminalPublisher) Commit(ctx context.Context, request TerminalRequest)
 		releaseStaged()
 		return CommittedTerminal{}, err
 	}
+	// Outbox entries re-project live events (commentary, output deltas) that
+	// were emitted under the operation that started the turn, so every entry
+	// must carry that emission identity. Swapping in a later operation (for
+	// example the cancel operation) makes stable re-projection collide with
+	// the already-published event and blocks the terminal projection.
 	projectionOperationID := request.Operation.ID
-	projectionOperationID, itemID = p.runtime.TerminalProjectionIdentity(
-		turnID,
-		projectionOperationID,
-		itemID,
-	)
 	entry := func(id string, kind protocol.EventKind, payload json.RawMessage) turnkernel.ProjectionOutboxEntry {
 		return turnkernel.ProjectionOutboxEntry{
 			ID: id, EventID: TerminalOutboxEventID(turnID, id),

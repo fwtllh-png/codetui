@@ -323,12 +323,15 @@ func TestCancelBeforeCoordinatorStartupCommitsCanceledTurn(t *testing.T) {
 	if terminal.Kind != protocol.EventTurnCanceled {
 		t.Fatalf("terminal = %s", terminal.Kind)
 	}
-	if terminal.OperationID != cancel.ID ||
-		terminal.ItemID != "item-startup-cancel" {
+	// The canceled terminal re-projects live events, so it stays under the
+	// emission (start) operation identity rather than the cancel operation.
+	if terminal.OperationID != start.ID ||
+		terminal.ItemID != "item_802" {
 		t.Fatalf(
-			"cancel terminal operation=%s item=%s",
+			"cancel terminal operation=%s item=%s, want start operation %s",
 			terminal.OperationID,
 			terminal.ItemID,
+			start.ID,
 		)
 	}
 }

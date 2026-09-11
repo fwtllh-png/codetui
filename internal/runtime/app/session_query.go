@@ -265,6 +265,16 @@ func (r *SessionService) projectSessionActivity(
 	ctx context.Context,
 	summary protocol.SessionSummary,
 ) (protocol.SessionSummary, error) {
+	if summary.LatestTurnID != "" {
+		withdrawn, err := r.TurnWithdrawn(ctx, summary.ThreadID, summary.LatestTurnID)
+		if err != nil {
+			return protocol.SessionSummary{}, err
+		}
+		summary.LatestTurnWithdrawn = withdrawn
+		if withdrawn {
+			summary.Status = protocol.SessionStatusIdle
+		}
+	}
 	threadIDs, err := r.sessionLifecycle.ThreadIDs(ctx, summary.SessionID)
 	if err != nil {
 		return protocol.SessionSummary{}, err

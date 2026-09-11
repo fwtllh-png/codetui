@@ -31,6 +31,15 @@ func (r *Runtime) ArtifactStore() artifact.SessionArtifactStore {
 func (r *Runtime) CheckpointRuntime() any { return r.engine }
 func (r *Runtime) Durable() bool          { return r.durable }
 
+func (r *Runtime) BeginContextMutation() (func(), error) {
+	r.SessionService.mutationMu.Lock()
+	if r.OperationService.hasWorkspaceOperation() {
+		r.SessionService.mutationMu.Unlock()
+		return nil, retryableProblem(protocol.CodeConflict, "Workspace context is being changed")
+	}
+	return r.SessionService.mutationMu.Unlock, nil
+}
+
 func (r *Runtime) ContextRebaseStore() artifact.ContextRebaseStore {
 	return r.contextRebaseStore
 }

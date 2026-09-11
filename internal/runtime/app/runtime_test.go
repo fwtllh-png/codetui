@@ -163,8 +163,13 @@ func TestRuntimeCancelActuallyCancelsActiveTurn(t *testing.T) {
 	if data.Reason != "test" {
 		t.Fatalf("reason = %q, want test", data.Reason)
 	}
-	if terminal.ItemID != "cancel_item" {
-		t.Fatalf("ItemID = %q, want cancel_item", terminal.ItemID)
+	// The canceled terminal re-projects live events, so it stays under the
+	// emission (start) operation identity rather than the cancel operation.
+	if terminal.OperationID != start.ID || terminal.ItemID != "item_1" {
+		t.Fatalf(
+			"terminal operation=%s item=%s, want start operation %s",
+			terminal.OperationID, terminal.ItemID, start.ID,
+		)
 	}
 }
 

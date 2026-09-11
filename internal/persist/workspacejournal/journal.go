@@ -669,6 +669,23 @@ func (m *Manager) HasDraft(turnID string) bool {
 	return m.drafts[turnID] != nil
 }
 
+// KeepDraft settles a user's explicit context withdrawal without changing files.
+// This is not verification: callers must retain unverified change evidence.
+func (m *Manager) KeepDraft(turnID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	journal := m.drafts[turnID]
+	if journal == nil {
+		return nil
+	}
+	if err := m.ledger.append(entry{Phase: phaseCommit, TurnID: turnID}); err != nil {
+		return err
+	}
+	delete(m.drafts, turnID)
+	m.committed[turnID] = journal
+	return nil
+}
+
 // DraftTurnIDs lists terminal Turns that still retain a workspace draft.
 func (m *Manager) DraftTurnIDs() []string {
 	m.mu.Lock()
