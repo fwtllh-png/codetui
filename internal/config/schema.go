@@ -152,9 +152,10 @@ type Execution struct {
 	Tools           bool   `json:"tools" toml:"tools"`
 	MaxOutputTokens uint64 `json:"max_output_tokens" toml:"max_output_tokens"`
 	MaxSteps        int    `json:"max_steps" toml:"max_steps"`
-	// ImplementNoProgressSamples is the no-progress finish-only lease used
-	// once a Turn Work Item has Known or Open facts. Zero inherits the
-	// MaxSteps-derived 2/3 finish-only lease.
+	// ImplementNoProgressSamples is the finish-only lease for consecutive
+	// Samples that repeat the same tool-call identity. Zero inherits the
+	// MaxSteps-derived 2/3 finish-only lease. Distinct arguments on the
+	// same path set do not consume it.
 	ImplementNoProgressSamples int `json:"implement_no_progress_samples" toml:"implement_no_progress_samples"`
 	// Timeout covers connection establishment, TLS negotiation, and response
 	// headers. Streaming body lifetime is governed by the caller Context and

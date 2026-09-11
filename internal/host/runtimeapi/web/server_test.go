@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io/fs"
 	"net"
 	"net/http"
@@ -21,6 +20,9 @@ import (
 	"github.com/coder/websocket"
 	"github.com/coder/websocket/wsjson"
 	"github.com/fwtllh-png/QCode/internal/adapter/mcp"
+	"github.com/fwtllh-png/QCode/internal/adapter/tool"
+	gittool "github.com/fwtllh-png/QCode/internal/adapter/tool/git"
+	"github.com/fwtllh-png/QCode/internal/adapter/tool/guard"
 	threadstate "github.com/fwtllh-png/QCode/internal/host/runtimeapi/thread"
 	webhost "github.com/fwtllh-png/QCode/internal/host/runtimeapi/web"
 	"github.com/fwtllh-png/QCode/internal/persist/state"
@@ -30,8 +32,10 @@ import (
 	"github.com/fwtllh-png/QCode/internal/runtime/protocol"
 	"github.com/fwtllh-png/QCode/internal/security/authority"
 	"github.com/fwtllh-png/QCode/internal/security/controlmatrix"
+	"github.com/fwtllh-png/QCode/internal/security/policy"
 	"github.com/fwtllh-png/QCode/internal/security/sandbox"
 	"github.com/fwtllh-png/QCode/internal/security/vcsbroker"
+	"github.com/fwtllh-png/QCode/internal/security/workspacebroker"
 )
 
 func TestBootstrapIsLoopbackFencedAndDoesNotCacheToken(t *testing.T) {
@@ -981,13 +985,24 @@ func TestWorkspaceRoutesUseBoundedWorkspaceQuery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	runtime := app.NewRuntime(app.Options{})
+	registry := tool.NewRegistry(nil, nil)
+	if err := gittool.RegisterMutations(registry, root, &workspacebroker.Runtime{VCS: vcs}); err != nil {
+		t.Fatal(err)
+	}
+	runtime := app.NewRuntime(app.Options{GitControl: &app.GitControl{
+		Workspace: query,
+		NewGuard: func(context.Context, protocol.SessionProfile) (*guard.Guard, error) {
+			return guard.New(guard.Options{
+				Registry: registry, Workspace: root,
+				Policy: policy.DefaultRuntime(policy.ModeAct, policy.PermissionSuggest),
+			})
+		},
+	}})
 	t.Cleanup(func() { _ = runtime.Close(context.Background()) })
 	identity, err := protocol.NewWorkspaceIdentity("file://"+root, root, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	var opened string
 	server, err := webhost.New(webhost.Options{
 		Assets: fstest.MapFS{
 			"index.html": &fstest.MapFile{
@@ -996,10 +1011,6 @@ func TestWorkspaceRoutesUseBoundedWorkspaceQuery(t *testing.T) {
 			},
 		},
 		ExpectedHost: host,
-		OpenPath: func(_ context.Context, target string) error {
-			opened = target
-			return nil
-		},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1011,6 +1022,10 @@ func TestWorkspaceRoutesUseBoundedWorkspaceQuery(t *testing.T) {
 		t.Fatal(err)
 	}
 	token := bootstrapToken(t, server, host)
+	missingKey := postWeb(t, server, host, token, "workspace/git-action", `{}`)
+	if missingKey.Code != http.StatusBadRequest {
+		t.Fatalf("Git action without idempotency key status=%d", missingKey.Code)
+	}
 	branchRequest := httptest.NewRequest(
 		http.MethodPost,
 		"http://"+host+"/api/v1/workspace/git-switch",
@@ -1036,6 +1051,26 @@ func TestWorkspaceRoutesUseBoundedWorkspaceQuery(t *testing.T) {
 		!strings.Contains(response.Body.String(), `"path":"main.go"`) {
 		t.Fatalf("search status=%d body=%s", response.Code, response.Body.String())
 	}
+	gitStatus := postWeb(t, server, host, token, "workspace/git-status", `{}`)
+	if gitStatus.Code != http.StatusOK ||
+		!strings.Contains(gitStatus.Body.String(), `"files":[]`) ||
+		!strings.Contains(gitStatus.Body.String(), `"branch":"feature"`) {
+		t.Fatalf("Git overview status=%d body=%s", gitStatus.Code, gitStatus.Body.String())
+	}
+	if err := os.WriteFile(filepath.Join(root, "main.go"), []byte("package main\n\nfunc changed() {}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	gitPatch := postWeb(t, server, host, token, "workspace/git-diff", `{"path":"main.go","staged":false}`)
+	if gitPatch.Code != http.StatusOK || !strings.Contains(gitPatch.Body.String(), "+func changed()") {
+		t.Fatalf("Git patch status=%d body=%s", gitPatch.Code, gitPatch.Body.String())
+	}
+	invalidPatch := postWeb(t, server, host, token, "workspace/git-diff", `{"path":"../outside","staged":false}`)
+	if invalidPatch.Code == http.StatusOK {
+		t.Fatal("Git diff exposed an out-of-workspace path")
+	}
+	if err := os.WriteFile(filepath.Join(root, "main.go"), []byte("package main\n\nfunc hello() {}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	response = postWeb(
 		t,
 		server,
@@ -1060,36 +1095,8 @@ func TestWorkspaceRoutesUseBoundedWorkspaceQuery(t *testing.T) {
 		"workspace/open",
 		`{"path":"main.go"}`,
 	)
-	canonicalRoot, err := filepath.EvalSymlinks(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if response.Code != http.StatusOK ||
-		!strings.Contains(response.Body.String(), `"opened":true`) ||
-		opened != filepath.Join(canonicalRoot, "main.go") {
-		t.Fatalf(
-			"open status=%d opened=%q body=%s",
-			response.Code,
-			opened,
-			response.Body.String(),
-		)
-	}
-	response = postWeb(
-		t,
-		server,
-		host,
-		token,
-		"workspace/open",
-		fmt.Sprintf(`{"path":%q}`, filepath.Join(canonicalRoot, "main.go")),
-	)
-	if response.Code != http.StatusOK ||
-		opened != filepath.Join(canonicalRoot, "main.go") {
-		t.Fatalf(
-			"absolute open status=%d opened=%q body=%s",
-			response.Code,
-			opened,
-			response.Body.String(),
-		)
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("removed workspace/open route status=%d body=%s", response.Code, response.Body.String())
 	}
 	var resourceEnvelope struct {
 		Result struct {
@@ -1218,8 +1225,8 @@ func TestWorkspaceRoutesUseBoundedWorkspaceQuery(t *testing.T) {
 		"workspace/open",
 		`{"path":"../secret"}`,
 	)
-	if response.Code != http.StatusBadRequest {
-		t.Fatalf("open escape status=%d body=%s", response.Code, response.Body.String())
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("removed workspace/open route status=%d body=%s", response.Code, response.Body.String())
 	}
 }
 

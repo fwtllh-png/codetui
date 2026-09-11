@@ -9,6 +9,7 @@ import {
   useState,
   type KeyboardEvent
 } from "react";
+import {Presence} from "./primitives/Presence";
 
 interface Props {
   value: string;
@@ -103,10 +104,11 @@ export function ReasoningMenu({
           ? <ChevronUp size={13} aria-hidden="true" />
           : <ChevronDown size={13} aria-hidden="true" />}
       </button>
-      {open && (
+      <Presence open={open}>
         <div
           ref={menuRef}
           className="reasoningMenu"
+          data-motion-surface
           role="menu"
           aria-label="Reasoning modes"
           onKeyDown={onMenuKeyDown}
@@ -129,7 +131,7 @@ export function ReasoningMenu({
             </button>
           ))}
         </div>
-      )}
+      </Presence>
     </span>
   );
 }

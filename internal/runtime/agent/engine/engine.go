@@ -100,6 +100,7 @@ type Engine struct {
 	turnCheckpoints  []agentcontext.TurnCheckpoint
 	narrativeMu      sync.Mutex
 	pendingNarrative chan struct{}
+	titleState      sessionTitleState
 
 	context         agentcontext.Authority
 	prefixMu        sync.Mutex
@@ -290,6 +291,7 @@ func New(options Options) (*Engine, error) {
 	if err := engine.registerTurnHistoryTool(); err != nil {
 		return nil, err
 	}
+	engine.syncSessionTitleState(provider.Usage{})
 	return engine, nil
 }
 
@@ -347,6 +349,7 @@ func (e *Engine) ApplySessionProfile(profile protocol.SessionProfile) error {
 		profile.PromptCacheRevision,
 	)
 	e.applySessionPolicyLocked(profile)
+	e.syncSessionTitleState(provider.Usage{})
 	return nil
 }
 

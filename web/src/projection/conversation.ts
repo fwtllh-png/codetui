@@ -72,6 +72,15 @@ export type ConversationNode =
     }
   | {
       readonly id: string;
+      readonly kind: "commentary";
+      readonly turnID: string;
+      readonly sequence: number;
+      readonly text: string;
+      readonly sampleID: string;
+      readonly callIDs: readonly string[];
+    }
+  | {
+      readonly id: string;
       readonly kind: "reasoning";
       readonly turnID: string;
       readonly sequence: number;
@@ -169,6 +178,7 @@ export interface ConversationSnapshot {
   readonly order: readonly string[];
   readonly nodes: ReadonlyMap<string, ConversationNode>;
   readonly activeTurnID: string;
+  readonly activeStatus?: string;
   readonly pendingApproval?: RuntimeEvent;
   readonly pendingInput?: RuntimeEvent;
   readonly revision: number;
@@ -200,6 +210,8 @@ export class ConversationProjection {
   private readonly reasoningByTurn = new Map<string, string>();
   private readonly ids = new Map<string, string>();
   private readonly activeTurns = new Set<string>();
+  private readonly activities = new Map<string, string>();
+  private readonly runningTools = new Map<string, Set<string>>();
   private readonly approvals = new Map<string, RuntimeEvent>();
   private readonly inputs = new Map<string, RuntimeEvent>();
   private readonly receipts = new Map<string, Readonly<Record<string, unknown>>>();
@@ -224,6 +236,7 @@ export class ConversationProjection {
       case "turn.started":
         this.ids.set(event.turn_id, event.operation_id);
         this.activeTurns.add(event.turn_id);
+        this.setActivity(event.turn_id, "Thinking...");
         this.put({
           id: event.id,
           kind: "user",
@@ -256,15 +269,26 @@ export class ConversationProjection {
         );
         break;
       case "output.delta":
+        this.setActivity(event.turn_id, "Responding...");
         this.appendAssistant(event, stringValue(data.text));
         break;
+      case "commentary.completed":
+        this.addCommentary(event);
+        break;
       case "reasoning.delta":
+        this.setActivity(event.turn_id, "Thinking...");
         this.appendReasoning(event, stringValue(data.text));
         break;
       case "reasoning.completed":
         this.finishReasoning(event, stringValue(data.text));
         break;
       case "tool.start":
+        {
+          const running = this.runningTools.get(event.turn_id) ?? new Set<string>();
+          running.add(stringValue(data.call_id));
+          this.runningTools.set(event.turn_id, running);
+          this.refreshToolActivity(event.turn_id);
+        }
         this.startTool(event);
         break;
       case "tool.output":
@@ -272,7 +296,8 @@ export class ConversationProjection {
         break;
       case "tool.result":
         this.finishTool(event);
-        this.markToolContinued(event);
+        this.runningTools.get(event.turn_id)?.delete(stringValue(data.call_id));
+        this.refreshToolActivity(event.turn_id);
         break;
       case "provider.attempt":
         this.applyProviderAttempt(event);
@@ -281,6 +306,7 @@ export class ConversationProjection {
         this.updateCommandExecution(event);
         break;
       case "approval.required":
+        this.setActivity(event.turn_id, "Awaiting approval...");
         this.approvals.set(requestID(event), event);
         this.applyApproval(event);
         this.touch();
@@ -296,15 +322,18 @@ export class ConversationProjection {
           });
         }
         this.approvals.delete(requestID(event));
+        this.refreshToolActivity(event.turn_id);
         this.touch();
         break;
       }
       case "input.required":
         this.inputs.set(requestID(event), event);
+        this.refreshToolActivity(event.turn_id);
         this.touch();
         break;
       case "input.resolved":
         this.inputs.delete(requestID(event));
+        this.refreshToolActivity(event.turn_id);
         this.touch();
         break;
       case "turn.completed":
@@ -373,6 +402,9 @@ export class ConversationProjection {
         break;
       case "thread.compacted":
       case "turn.compaction":
+        if (event.kind === "turn.compaction" && hideTranscriptCompaction(data)) {
+          break;
+        }
         this.put({
           id: event.kind === "turn.compaction"
             ? `context-${event.turn_id}`
@@ -403,16 +435,44 @@ export class ConversationProjection {
   snapshot(): ConversationSnapshot {
     if (!this.dirty) return this.current;
     this.revision += 1;
+    const activeTurnID = [...this.activeTurns].at(-1) ?? "";
     this.current = Object.freeze({
       order: Object.freeze([...this.order]),
       nodes: new Map(this.nodes),
-      activeTurnID: [...this.activeTurns].at(-1) ?? "",
+      activeTurnID,
+      activeStatus: this.activities.get(activeTurnID),
       pendingApproval: [...this.approvals.values()].at(-1),
       pendingInput: [...this.inputs.values()].at(-1),
       revision: this.revision
     });
     this.dirty = false;
     return this.current;
+  }
+
+  private addCommentary(event: RuntimeEvent): void {
+    const id = commentaryNodeID(event);
+    if (this.nodes.has(id)) return;
+    const callIDs = Array.isArray(event.data.call_ids)
+      ? event.data.call_ids.filter((value): value is string => typeof value === "string")
+      : [];
+    const anchors = callIDs.flatMap((callID) => {
+      const tool = this.toolNodeForCall(callID);
+      return tool && tool.turnID === event.turn_id ? [tool] : [];
+    });
+    const first = anchors.sort((a, b) => a.sequence - b.sequence)[0];
+    this.put({
+      id, kind: "commentary", turnID: event.turn_id,
+      sequence: first?.sequence ?? event.sequence,
+      text: stringValue(event.data.text),
+      sampleID: stringValue(event.data.sample_id),
+      callIDs: Object.freeze(callIDs)
+    });
+    // Recovery may publish a confirmed message after its tools were projected.
+    if (first) {
+      const index = this.order.indexOf(first.id);
+      this.order.pop();
+      this.order.splice(index, 0, id);
+    }
   }
 
   private appendAssistant(event: RuntimeEvent, delta: string): void {
@@ -691,6 +751,28 @@ export class ConversationProjection {
     if (!node) return;
     const data = event.data;
     switch (event.kind) {
+      case "commentary.completed": {
+        const id = commentaryNodeID(event);
+        if (node.activities.some((item) => item.id === id)) break;
+        const callIDs = Array.isArray(data.call_ids) ? data.call_ids : [];
+        const anchor = node.activities.find((item) =>
+          item.callID && callIDs.includes(item.callID)
+        );
+        const activity: ProjectedAgentActivity = Object.freeze({
+          id, sequence: anchor?.sequence ?? event.sequence,
+          kind: "message", title: "Update",
+          summary: stringValue(data.text), state: "completed"
+        });
+        const activities = [...node.activities];
+        const index = anchor ? activities.indexOf(anchor) : activities.length;
+        activities.splice(index, 0, activity);
+        this.put({
+          ...node,
+          summary: anchor || node.state !== "running" ? node.summary : activity.summary,
+          activities: Object.freeze(activities)
+        });
+        break;
+      }
       case "turn.started":
         this.updateAgent(node, agentStartupActivity(
           event,
@@ -814,7 +896,15 @@ export class ConversationProjection {
 
   private applyProviderAttempt(event: RuntimeEvent): void {
     const presentation = providerAttemptPresentation(event.data);
-    if (!presentation) return;
+    if (!presentation) {
+      if (event.data.status === "started" || event.data.status === "completed") {
+        this.remove(providerStateID(event.turn_id));
+        this.setActivity(event.turn_id, event.data.stop_reason === "tool_use"
+          ? "Preparing tools..." : "Thinking...");
+      }
+      return;
+    }
+    this.setActivity(event.turn_id, presentation.title);
     this.put({
       id: providerStateID(event.turn_id),
       kind: "status",
@@ -828,24 +918,34 @@ export class ConversationProjection {
     });
   }
 
-  private markToolContinued(event: RuntimeEvent): void {
-    if (Boolean(event.data.is_error)) return;
-    const id = providerStateID(event.turn_id);
-    const previous = this.nodes.get(id);
-    if (previous?.kind !== "status") return;
-    this.put({
-      ...previous,
-      sequence: event.sequence,
-      title: "Continuing this turn",
-      text: "Tool finished. Continuing the same turn.",
-      warning: false,
-      failed: false
-    });
+  private setActivity(turnID: string, status: string): void {
+    if (this.activities.get(turnID) === status) return;
+    this.activities.set(turnID, status);
+    this.touch();
+  }
+
+  private refreshToolActivity(turnID: string): void {
+    for (const event of this.approvals.values()) {
+      if (event.turn_id === turnID) {
+        this.setActivity(turnID, "Awaiting approval...");
+        return;
+      }
+    }
+    for (const event of this.inputs.values()) {
+      if (event.turn_id === turnID) {
+        this.setActivity(turnID, "Waiting for input...");
+        return;
+      }
+    }
+    this.setActivity(turnID, this.runningTools.get(turnID)?.size
+      ? "Running tools..." : "Continuing...");
   }
 
   private finishTurn(event: RuntimeEvent, failed: boolean): void {
     this.remove(providerStateID(event.turn_id));
     this.activeTurns.delete(event.turn_id);
+    this.activities.delete(event.turn_id);
+    this.runningTools.delete(event.turn_id);
     for (const [key, pending] of this.approvals) {
       if (pending.turn_id === event.turn_id) this.approvals.delete(key);
     }
@@ -1075,6 +1175,10 @@ function reasoningKey(event: RuntimeEvent): string {
   return `${event.turn_id}:${sampleID || "active"}`;
 }
 
+export function commentaryNodeID(event: RuntimeEvent): string {
+  return `commentary-${event.turn_id}:${stringValue(event.data.message_id) || event.id}`;
+}
+
 function deliverablePathKey(threadID: string, path: string): string {
   return `${threadID}\u0000${path}`;
 }
@@ -1209,6 +1313,15 @@ function numberValue(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value)
     ? value
     : undefined;
+}
+
+function hideTranscriptCompaction(data: Record<string, unknown>): boolean {
+  const removedMessages = numberValue(data.removed_messages) ?? 0;
+  const prunedResults = numberValue(data.pruned_tool_results) ?? 0;
+  return stringValue(data.phase) === "post_turn" ||
+    (stringValue(data.status) === "fallback" &&
+      removedMessages === 0 &&
+      prunedResults === 0);
 }
 
 function firstNonEmptyLine(value: string): string {
@@ -1467,7 +1580,6 @@ function providerAttemptPresentation(data: Record<string, unknown>): {
 } | undefined {
   const status = stringValue(data.status);
   const failure = stringValue(data.failure_code);
-  const stop = stringValue(data.stop_reason);
   if (status === "retry_wait" && failure === "rate_limit") {
     return {
       title: "Provider rate limited",
@@ -1487,12 +1599,6 @@ function providerAttemptPresentation(data: Record<string, unknown>): {
       title: "Provider output incomplete",
       text: "Safely continuing from the confirmed output.",
       warning: true
-    };
-  }
-  if (status === "completed" && stop === "tool_use") {
-    return {
-      title: "Continuing this turn",
-      text: "Tool call requested. This is a normal sample boundary, not a truncated message."
     };
   }
   return undefined;

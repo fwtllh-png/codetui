@@ -31,6 +31,30 @@ npm --prefix web run build
 make web-e2e
 ```
 
+Web 主题 Token 集中在 `web/src/ui/theme/tokens.css`，统一控件外观在
+`theme/components.css`，共享交互组件在 `ui/primitives`。主题层只负责呈现，
+不从文本或颜色反推 Runtime 状态。圆角按工具表面 8px、控件 12px、菜单 14px、
+输入区 20px、弹层 24px 分层；新增样式需使用语义 Token 并同步
+`testdata/contracts/web-experience-contract.json`，不要在组件内重复维护色板。
+动效时长与曲线只从 CSS Token 读取，不在组件中复制计时常量：
+反馈 120ms、菜单进入 160ms、退出 180ms、折叠 220ms、弹层进入 240ms、
+骨架呼吸 1600ms。`ui/primitives/Presence.tsx` 统一延迟卸载，退出内容立即
+`inert`，嵌套弹层通过 Presence 上下文释放焦点；快速重开取消旧退出，
+懒加载表面到达后才开始进入。表面标记 `data-motion-surface`，
+遮罩标记 `data-motion-backdrop`，不要再单独叠加入场动画。
+`motion.ts` 共享监听系统动态偏好与页面可见性，减少动态效果或隐藏页面时直接结算，
+无持续轮询；CSS 时间解析覆盖构建压缩后的 `.18s` 格式。
+`Collapse` 共用该生命周期，保留 CSS Grid 高度过渡与闭合后卸载。
+`GitTools` 按需加载并显式绑定 Workspace；异步查询支持 AbortSignal，不能把旧请求结果
+写入切换后的窗口。Git patch 使用 `diff`（jsdiff）的 unified-diff Parser；
+`GitPatchView` 的行号来自 hunk 坐标，DOM 仅保留可见视口与前后各一个视口，
+行高取实际 CSS 几何值。二进制或不可解析的 patch 保留原文，不伪造文件前后内容。
+浏览器回归覆盖浅深主题、手机抽屉、Git 浮窗、Trajectory 工具栏、嵌套焦点、动态效果、
+高对比度与 200% 缩放。视觉基线需在实际检查截图后更新。
+对运行中的开发环境进行验证时，可先用 `make build BINARY=.tmp/qcode-material3`
+构建独立二进制，再通过 `QCODE_E2E_BINARY` 指定它运行 Playwright；
+测试使用临时数据目录和随机端口，不替换当前 Web Owner。
+
 文档和交付检查：
 
 ```bash

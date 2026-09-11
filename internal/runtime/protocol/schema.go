@@ -207,6 +207,7 @@ var timeType = reflect.TypeOf(time.Time{})
 var rawMessageType = reflect.TypeOf(json.RawMessage{})
 var editorContextKindType = reflect.TypeOf(EditorContextKind(""))
 var editorContextSourceType = reflect.TypeOf(EditorContextSource(""))
+var planPurposeType = reflect.TypeOf(PlanPurpose(""))
 
 func schemaOf(goType reflect.Type) *TypeSchema {
 	for goType.Kind() == reflect.Pointer {
@@ -218,6 +219,10 @@ func schemaOf(goType reflect.Type) *TypeSchema {
 	case goType == rawMessageType:
 		// Raw JSON is exactly that: a tool's arguments are the tool's business.
 		return &TypeSchema{Description: "arbitrary JSON"}
+	case goType == planPurposeType:
+		return &TypeSchema{Type: "string", Enum: []string{
+			string(PlanPurposeExecution), string(PlanPurposeDeliverable),
+		}}
 	case goType == editorContextKindType:
 		return &TypeSchema{Type: "string", Enum: []string{
 			string(EditorContextFile), string(EditorContextSelection),

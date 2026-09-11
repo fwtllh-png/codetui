@@ -91,6 +91,10 @@ func Project(event protocol.Event) (Update, error) {
 	switch data := event.Data.(type) {
 	case *protocol.OutputDeltaData:
 		return TextUpdate{Base: base, Channel: "output", Text: data.Text}, nil
+	case *protocol.CommentaryCompletedData:
+		return TextUpdate{Base: base, Channel: "commentary", Text: data.Text}, nil
+	case *protocol.SessionTitleUpdatedData:
+		return TextUpdate{Base: base, Channel: "session_title", Text: data.Title}, nil
 	case *protocol.ReasoningDeltaData:
 		return TextUpdate{Base: base, Channel: "reasoning", Text: data.Text}, nil
 	case *protocol.ReasoningCompletedData:

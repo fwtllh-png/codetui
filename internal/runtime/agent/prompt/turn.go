@@ -176,11 +176,10 @@ func renderWorkingSet(options TurnOptions) string {
 	b.WriteString(
 		"Paths this session has touched, most relevant first. " +
 			"Contents are not included. Do not file_read a listed path unless " +
-			"you are about to edit a specific window. A dirty git status or " +
-			"git_diff is not a reason to file_read. Absence from the visible " +
-			"tail is not a reason to file_read; use turn_history or " +
-			"result_get for prior read text. After search_text returns line " +
-			"hits, do not page a listed file.\n",
+			"you are about to edit a specific window or the prior text is no " +
+			"longer in this sample. A dirty git status or git_diff is not a " +
+			"reason to file_read. After search_text returns line hits, prefer " +
+			"that window instead of paging the whole file.\n",
 	)
 	for _, entry := range options.WorkingSet {
 		b.WriteString(renderWorkingSetEntry(entry))

@@ -1,0 +1,5 @@
+data: {"choices":[{"delta":{"content":"I will inspect the handler before checking its callers."},"finish_reason":null}]}
+
+data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_commentary_read","function":{"name":"file_read","arguments":"{\"path\":\"main.go\"}"}}]},"finish_reason":"tool_calls"}]}
+
+data: [DONE]

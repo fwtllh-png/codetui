@@ -145,15 +145,16 @@ Handle，再用 `result_get` 的 `mode=tail` 或 `mode=query` 分页，不要用
 Resume Fact：不要重复已完成步骤，下一项未完成工作取第一项 outstanding Plan
 标题，并列出已读路径（上限继承 `context.working_set.max_entries`）。有行号
 命中时还列出 `Located sites`。`working_set` 只列路径；不要再次 `file_read`，
-除非即将编辑具体窗口。搜索命中后对该路径的 `file_read` 必须带
-`start_line`，否则工具返回 `located_site_window_required`。脏的
-`git_status` / `git_diff` 不是重读理由。可见 Tail 没有那次读取不是重读理由，
-应走 `turn_history` / `result_get`；截断后先 `result_get`。取消 Checkpoint
-保留下一项 Plan 与已读路径指针，失败仍不带半开 Tool 链。Paused Continue
-不得先用 `git_status`、`git_diff` 或 `file_read` 巡视工作区，也不得把
-`read_paths` 不在 tail 里当成重读许可。Plan 已有完成步骤且仍有 outstanding
-工作时，读取新文件不再续期，并改用公开字段
-`execution.implement_no_progress_samples`（默认 6）进入 Finish-only。
+除非即将编辑具体窗口或先前正文已不在当前 Sample。搜索命中后优先读该窗口。
+脏的 `git_status` / `git_diff` 不是重读理由。覆盖范围内的已知读回放原结果；
+无法回放时放行必要重读。Continue 允许 git 巡视，不再因此报错。取消 Checkpoint
+保留下一项 Plan 与已读路径指针，失败仍不带半开 Tool 链。Plan 已有完成步骤且仍有
+outstanding 工作时，读取新文件不再写入进展签名。相邻 Sample 重复同一工具调用身份
+（工具名 + 规范化 arguments）时，才改用公开字段
+`execution.implement_no_progress_samples`（默认 6）进入 Finish-only；
+同路径上不同 arguments 的验证或修正不算空转。停轮信号是模型停止调用工具并写出
+用户可见正文；`turn_complete(status=complete)` 可选，未完成的 execution Plan
+步骤不拒绝停轮。
 
 ## Truth Retention 与 Admission
 
@@ -181,12 +182,14 @@ Artifact，每个 Excerpt 有稳定 Message ID 和 Digest；输出必须是严�
 
 `post_turn` 只在 `turn.completed` 之后生成非权威 Digest 分区，不得阻塞下一轮
 Sample，也不得把 200K 窗口留到 Timeout。用户暂停、取消或失败的 Turn 不调用
-summary 模型，也不把 Narrative fallback 显示成压缩失败。只允许 `off` 或
-`post_turn`。
+summary 模型，也不把 Narrative fallback 显示成压缩失败。对话投影同样隐藏
+`phase=post_turn` 的维护事件。只允许 `off` 或 `post_turn`。
 成功时 Narrative 进入 World 分区 `narrative`，不是 History Replacement。失败时
 保留 Ledger 投影的 Session State。`thread.compact` 立即做确定性替换，可选
 `focus`（公开上限 4096 字节）只影响随后的 Digest。Narrative 通过 `summary`
-Route，禁用 Tool 与 Native Search。瞬时 429 / 5xx / Timeout 与主采样共用
+Route，禁用 Tool 与 Native Search。输出预算默认从 summary 模型声明的
+`MaxOutputTokens` 与剩余窗口推导；`semantic_narrative_max_output_tokens` 正值
+是 Operator Ceiling。瞬时 429 / 5xx / Timeout 与主采样共用
 RetryPolicy，等待计入 `semantic_narrative_timeout`；硬配额、解析失败或
 Staleness 立即 `fallback=ledger`。
 

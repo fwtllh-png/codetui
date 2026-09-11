@@ -16,17 +16,16 @@
 git clone https://github.com/fwtllh-png/QCode.git
 cd QCode
 make install
-cd /path/to/your/project
 qcode
 ```
 
 `make install` 会依次安装 Web 依赖、构建静态资源和 Go 二进制，再原子安装到
 `~/.local/bin/qcode`。二进制包含 Web 静态资源，运行期间不依赖源码目录或独立
-前端服务。安装后在任意项目目录执行 `qcode`，当前目录即为 Workspace；无配置
+前端服务。安装后在任意目录执行 `qcode`，只打开本机页面，不自动注册当前目录；无配置
 启动默认启用受 Guard 管理的内置工具，并使用 `auto` 审批姿态。
 
-同一用户只运行一个本机 Web Supervisor。之后在另一个项目目录再次执行
-`qcode`，命令会把该目录注册为新的 Workspace、打开带 Workspace 定位参数的已有
+同一用户只运行一个本机 Web Supervisor。通过页面 `Add workspace` 添加目录，
+或显式执行 `qcode --workspace /path/to/project`，命令会注册该目录并打开带 Workspace 定位参数的已有
 页面并正常退出。每个 Workspace 拥有独立 Runtime、Sandbox、Tool Registry、索引、
 后台调度器和事件投影；页面侧栏会同时展示所有已注册 Workspace 及其 Session。
 
@@ -37,7 +36,8 @@ qcode
 make install PREFIX=/usr/local
 ```
 
-源码开发和调试仍可使用 `make start START_WORKSPACE=/path/to/project`。该命令完成
+源码开发和调试使用 `make start` 时同样没有默认 Workspace；需要指定项目时使用
+`make start START_WORKSPACE=/path/to/project`。该命令完成
 Web 和二进制构建后，会比较 Owner Lease 中的构建身份；若已有 Supervisor 来自旧构建，
 先等待其安全退出再启动新进程，避免继续提供旧的嵌入式 Web 资源。卸载使用
 `make uninstall`，并可通过相同的 `PREFIX` 指定安装位置。
@@ -49,11 +49,12 @@ Web 和二进制构建后，会比较 Owner Lease 中的构建身份；若已有
 1. 显式选择 OpenAI、Anthropic、DeepSeek、GLM 或自定义 OpenAI-Compatible Provider；
 2. 输入准确的 Model ID；自定义服务还需填写 Base URL、协议、Canonical/Wire ID、
    Context、Max Output 和完整 Capability 声明；
-3. 填写所需的 API Key 并启动 Runtime。
+3. 填写所需的 API Key 并完成连接设置。
 
 没有默认 Provider 或 Model，也不通过内置枚举限制 Model ID。API Key 由操作系统
 Keyring 加密保存，不写入仓库、浏览器存储或 Setup Record；非敏感选择由 Runtime
-管理。Setup 完成后，页面依次引导选择 Workspace、创建 Session，再进入 Composer，
+管理。连接设置可在零 Workspace 状态下完成，此时不会构造具有目录访问能力的 Runtime。
+Setup 完成后，页面依次引导添加或选择 Workspace、创建 Session，再进入 Composer，
 不会代替用户自动创建 Session。Runtime 不从 Model ID 或 `/models` 列表猜测容量与
 布尔能力。对于探测到 Reasoning 但未声明 Effort 档位的模型，精确命中内置目录时使用
 目录档位，否则提供 `low`、`medium`、`high`、`xhigh`、`max`，默认 `medium`，
@@ -65,15 +66,16 @@ Connection 页面重新提交显式元数据并重启 Runtime。Web 默认监听
 
 ## 4. 直接运行二进制
 
-已有安装产物时直接进入目标项目：
+已有安装产物时可显式打开目标项目：
 
 ```bash
-cd /path/to/project
-qcode
+qcode --workspace /path/to/project
 ```
 
-不传 `--workspace` 时使用当前目录；不传 `--config`、`--provider` 或 `--model` 时，
-Web 进入首次引导，不会选择默认路由。支持的启动参数见[Web 使用指南](./usage.md)；
+不传 `--workspace`，且未显式配置 `execution.workspace` 或 `QCODE_WORKSPACE` 时，
+不会添加任何目录，也不会自动选中已有 Workspace。普通启动只恢复已添加的列表；
+移除最后一个 Workspace 后重启仍保持空列表。没有已保存的连接且未显式指定 Provider/Model
+时进入首次引导，不会选择默认路由。支持的启动参数见[Web 使用指南](./usage.md)；
 `qcode --help` 是当前 Binary 的参数事实。
 
 ## 5. 使用 Fixture

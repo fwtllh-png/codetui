@@ -27,6 +27,7 @@ type PersistentRuntimeOptions struct {
 	ProfileModels       map[string]protocol.ModelCapabilities
 	ToolCatalog         *tool.Registry
 	SessionWorkspaces   app.SessionWorkspaceManager
+	GitControl          *app.GitControl
 }
 
 // PreparePersistentRuntime restores static durable state without starting
@@ -65,6 +66,7 @@ func PreparePersistentRuntime(
 		ContextRebaseStore: contextRebases,
 		AgentPresets:       presets,
 		Observability:      options.Observability,
+		GitControl:         options.GitControl,
 	}
 	if options.DefaultProfile.Version != 0 {
 		runtimeOptions.SessionProfiles = repositories.Sessions

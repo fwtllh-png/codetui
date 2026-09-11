@@ -23,11 +23,12 @@ type ActiveTurnHandle struct {
 }
 type ActiveTurnSnapshot struct{ Turns int }
 type ActiveTurnRegistry struct {
-	mu       sync.Mutex
-	next     uint64
-	byTurn   map[protocol.TurnID]activeTurnEntry
-	byThread map[protocol.ThreadID]protocol.TurnID
-	profiles map[protocol.ThreadID]uint64
+	mu                 sync.Mutex
+	next               uint64
+	byTurn             map[protocol.TurnID]activeTurnEntry
+	byThread           map[protocol.ThreadID]protocol.TurnID
+	profiles           map[protocol.ThreadID]uint64
+	workspaceExclusive bool
 }
 type activeTurnEntry struct {
 	lease  ActiveTurnLease
@@ -42,6 +43,9 @@ func NewActiveTurnRegistry() *ActiveTurnRegistry {
 func (r *ActiveTurnRegistry) Reserve(threadID protocol.ThreadID, turnID protocol.TurnID, operationID protocol.OperationID, itemID protocol.ItemID) (ActiveTurnLease, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.workspaceExclusive {
+		return ActiveTurnLease{}, retryableProblem(protocol.CodeConflict, "a Workspace Git operation is active")
+	}
 	if _, exists := r.byTurn[turnID]; exists {
 		return ActiveTurnLease{}, errors.New("turn is already active")
 	}
@@ -59,6 +63,20 @@ func (r *ActiveTurnRegistry) Reserve(threadID protocol.ThreadID, turnID protocol
 	}
 	r.byThread[threadID] = turnID
 	return lease, nil
+}
+
+func (r *ActiveTurnRegistry) acquireWorkspace() (func(), error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.workspaceExclusive || len(r.byTurn) != 0 {
+		return nil, retryableProblem(protocol.CodeConflict, "finish active work before changing Git state")
+	}
+	r.workspaceExclusive = true
+	return func() {
+		r.mu.Lock()
+		r.workspaceExclusive = false
+		r.mu.Unlock()
+	}, nil
 }
 func (r *ActiveTurnRegistry) BindControl(turnID protocol.TurnID, cancel context.CancelFunc) error {
 	r.mu.Lock()

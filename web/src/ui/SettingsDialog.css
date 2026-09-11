@@ -36,7 +36,7 @@
   margin: 0;
   padding: 0 12px;
   font-size: 16px;
-  font-weight: 650;
+  font-weight: 600;
   line-height: 24px;
 }
 
@@ -55,7 +55,7 @@
   color: var(--ch-text-secondary);
   text-align: left;
   background: transparent;
-  border-radius: 8px;
+  border-radius: var(--ch-radius-control);
   font-size: 14px;
 }
 
@@ -92,7 +92,7 @@
   color: var(--ch-text-secondary);
   background: transparent;
   border: 1px solid var(--ch-border);
-  border-radius: 8px;
+  border-radius: var(--ch-radius-control);
   font-size: 12px;
 }
 
@@ -173,7 +173,7 @@
   gap: 5px;
   padding: 0 11px;
   border: 1px solid var(--ch-border);
-  border-radius: 7px;
+  border-radius: var(--ch-radius-control);
   background: var(--ch-panel);
   color: var(--ch-text-secondary);
   font-size: 12px;
@@ -198,7 +198,7 @@
   color: var(--ch-danger);
   background: var(--ch-danger-soft);
   border: 1px solid color-mix(in srgb, var(--ch-danger) 32%, var(--ch-border));
-  border-radius: 8px;
+  border-radius: var(--ch-radius-control);
   font-size: 12px;
 }
 
@@ -210,7 +210,7 @@
 .settingsSection h3 {
   margin: 0;
   font-size: 18px;
-  font-weight: 650;
+  font-weight: 600;
   line-height: 26px;
 }
 
@@ -272,7 +272,7 @@
   color: var(--ch-text);
   background: var(--ch-panel-subtle);
   border: 1px solid var(--ch-border);
-  border-radius: 8px;
+  border-radius: var(--ch-radius-control);
   appearance: none;
 }
 
@@ -308,7 +308,7 @@
   width: 16px;
   height: 16px;
   margin: 0;
-  accent-color: var(--ch-accent);
+  accent-color: var(--ch-business);
 }
 
 .settingsPreferenceControl input:disabled {
@@ -349,7 +349,7 @@
   color: var(--ch-text-secondary);
   background: transparent;
   border: 1px solid var(--ch-border);
-  border-radius: 8px;
+  border-radius: var(--ch-radius-control);
 }
 
 .themeChoices button:hover,
@@ -405,7 +405,7 @@
   color: var(--ch-text-secondary);
   background: var(--ch-code);
   border: 1px solid var(--ch-border);
-  border-radius: 8px;
+  border-radius: var(--ch-radius-control);
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
   font-size: 11px;
   line-height: 18px;
@@ -471,8 +471,8 @@
   padding: 2px 6px;
   color: var(--ch-text-secondary);
   background: var(--ch-panel-subtle);
-  border-radius: 4px;
-  font-size: 10px;
+  border-radius: var(--ch-radius);
+  font-size: 11px;
   line-height: 16px;
 }
 
@@ -491,7 +491,7 @@
 .settingsButtonRow button {
   min-height: 34px;
   border: 1px solid var(--ch-border);
-  border-radius: 8px;
+  border-radius: var(--ch-radius-control);
 }
 
 .credentialInput input {
@@ -552,7 +552,7 @@
   padding: 0 12px 0 34px;
   background: var(--ch-panel);
   border: 1px solid var(--ch-border);
-  border-radius: 8px;
+  border-radius: var(--ch-radius-control);
   outline: 0;
 }
 
@@ -594,7 +594,7 @@
   padding: 10px 12px;
   background: var(--ch-panel);
   border: 1px solid var(--ch-border);
-  border-radius: 8px;
+  border-radius: var(--ch-radius-control);
 }
 
 .settingsCatalogRow > svg {
@@ -620,14 +620,14 @@
 
 .settingsCatalogRow small {
   color: var(--ch-text-muted);
-  font-size: 10px;
+  font-size: 11px;
   line-height: 15px;
 }
 
 .settingsCatalogRow > input {
   width: 16px;
   height: 16px;
-  accent-color: var(--ch-accent);
+  accent-color: var(--ch-business);
 }
 
 .settingsToggle {
@@ -637,7 +637,7 @@
 .settingsToggle input {
   width: 16px;
   height: 16px;
-  accent-color: var(--ch-accent);
+  accent-color: var(--ch-business);
 }
 
 .settingsToolRow,
@@ -676,7 +676,7 @@
   margin: 0;
   overflow-wrap: anywhere;
   color: var(--ch-text-muted);
-  font-size: 10px;
+  font-size: 11px;
 }
 
 .settingsCatalogDetails dd {
@@ -693,7 +693,7 @@
   flex-wrap: wrap;
   gap: 4px 10px;
   color: var(--ch-text-muted);
-  font-size: 10px;
+  font-size: 11px;
 }
 
 .settingsExtensionDetail {
@@ -724,7 +724,7 @@
   min-width: 0;
   gap: 5px;
   color: var(--ch-text-muted);
-  font-size: 10px;
+  font-size: 11px;
 }
 
 .presetFields label:last-child {
@@ -738,7 +738,7 @@
   height: 36px;
   padding: 0 10px;
   border: 1px solid var(--ch-border);
-  border-radius: 8px;
+  border-radius: var(--ch-radius-control);
   outline: none;
   background: var(--ch-panel);
   color: var(--ch-text);
@@ -815,7 +815,7 @@
 .settingsActivity b,
 .settingsActivity small {
   color: var(--ch-text-muted);
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 500;
 }
 
@@ -849,7 +849,7 @@
   padding: 0 7px;
   color: var(--ch-text-secondary);
   background: transparent;
-  border-radius: 6px;
+  border-radius: var(--ch-radius);
   font-size: 11px;
 }
 
@@ -911,7 +911,7 @@
   gap: 6px;
   padding: 0 12px;
   border: 1px solid var(--ch-border);
-  border-radius: 8px;
+  border-radius: var(--ch-radius-control);
 }
 
 .modelEditorBody {

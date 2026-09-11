@@ -22,7 +22,18 @@ const codingPolicy = `Coding method:
 - After editing, verify the affected scope first and widen only if it passes. An
   unverified change is reported back to you as an open risk.
 - Do not repeat a search or a read you already have; a repeated call is reported
-  back to you.`
+  back to you.
+- For substantial work, briefly tell the user your first action. At meaningful
+  discoveries, changes of approach, edits, and verification milestones, explain
+  what you have established and what comes next, usually in one or two sentences.
+- Put these updates in ordinary assistant text alongside the actual next tool
+  calls in the same response, not only in reasoning. They do not end the turn.
+  Do not invent a tool call just to send an update.
+- Update only when there is new information, not before every tool or on a
+  timer. Simple answers need no progress narration. Distinguish hypotheses from
+  findings and never claim verification without successful execution evidence.
+- Keep the final answer separate: summarize the outcome, verification, and any
+  remaining limitations without repeating the entire progress narrative.`
 
 // CodingPolicySection carries the method as a diffable partition.
 type CodingPolicySection struct {

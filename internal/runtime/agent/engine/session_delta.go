@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 
+	"github.com/fwtllh-png/QCode/internal/adapter/provider"
 	agentcontext "github.com/fwtllh-png/QCode/internal/runtime/agent/context"
 )
 
@@ -53,6 +54,7 @@ func (e *Engine) applyDurableSessionDelta(
 	e.turn = max(e.turn, restore.State.Turn)
 	e.usage.Add(restore.Accounting.Usage)
 	e.costUSD += float64(restore.Accounting.CostMicrounits) / 1_000_000
+	e.syncSessionTitleState(provider.Usage{})
 	e.context.Restore(
 		restore.State.WorkingSet,
 		restore.State.Evidence,

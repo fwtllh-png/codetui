@@ -6,16 +6,17 @@
 make install
 ```
 
-之后在任意项目目录直接启动：
+之后在任意目录直接启动：
 
 ```bash
-cd /path/to/project
 qcode
 ```
 
-当前目录自动成为 Workspace，并自动打开浏览器。服务默认监听 `127.0.0.1:6732`。
-若 Web Supervisor 已运行，再次从其他目录执行 `qcode` 会把当前目录
-注册到已有进程，并直接打开对应 Workspace。`make start` 仅作为源码开发入口保留。
+普通启动只打开浏览器，不把当前目录、源码目录或安装目录自动添加为 Workspace，
+也不自动选中列表中的目录。服务默认监听 `127.0.0.1:6732`。
+显式执行 `qcode --workspace /path/to/project` 才会注册并打开该目录；已有 Supervisor
+时复用现有进程。`make start` 同样没有默认目录，只有显式传入 `START_WORKSPACE`
+才会添加并打开对应项目。它仅作为源码开发入口保留。
 它会使用 `--replace-owner` 比较构建身份并重启旧的开发 Supervisor；直接执行已安装的
 `qcode` 仍复用现有 Supervisor。
 
@@ -23,7 +24,7 @@ qcode
 
 | 参数 | 说明 |
 | --- | --- |
-| `--workspace PATH` | Workspace 根目录；未设置时使用配置值 |
+| `--workspace PATH` | 显式添加并打开目录；也可通过 `execution.workspace` 或 `QCODE_WORKSPACE` 显式指定，无隐式默认值 |
 | `--replace-owner` | 构建身份变化时重启已有 Web Owner；仅供源码开发启动使用 |
 | `--config PATH` | TOML 配置文件 |
 | `--data-dir PATH` | 持久状态目录 |
@@ -56,11 +57,79 @@ Web Host；会话、审批、输入、工具执行和持久化仍由 Runtime 负
 - 按 Turn、用户问题、Tool 和文件引用搜索长会话；
 - 管理 Credential 与受支持的 Extension 状态。
 
-Session 侧栏按 Workspace 分组，并将搜索、归档与行级操作渐进披露。默认标题会在首个
-`turn.start` 被接受后，从用户可见 Prompt 生成单行、UTF-8 安全的短标题；已有
-`New Chat` 会话在首次激活时按同一规则回填。显式重命名的标题不会被后续 Prompt 覆盖。
+界面采用低饱和 Material 风格，浅色和深色共用语义颜色、控件尺寸与分层圆角。
+Settings 中可选择跟随系统或固定主题。按钮与输入使用 120ms 状态反馈，
+菜单进入为 160ms，弹层进入为 240ms，退出为 180ms。
+关闭时立即禁用退出内容的交互并恢复焦点，过渡结束后再卸载；
+快速重开可以中断退出，不会因旧计时器再次消失。嵌套弹窗只由最上层处理焦点，
+从命令菜单打开新弹窗后，关闭会返回稳定的菜单按钮或输入框。
+骨架屏使用轻微呼吸效果，已有正文刷新时不替换成整页骨架屏。
+系统启用减少动态效果或页面进入后台时，停止持续动画并立即完成待卸载过渡；
+不对逐 Token 输出重复播放入场效果，也不增加模型请求。
+已完成 Turn 仍默认折叠执行过程，展开和收起使用 220ms 高度过渡，
+关闭后卸载详情；搜索和 Trajectory 定位继续自动展开目标执行过程。
 
-侧栏的文件夹加号打开 Workspace 管理界面。点击 `Choose folder` 后由本地 Host 打开
+对话标题栏保留会话定位和 Git 工具入口，不再提供右侧 Latest turn 面板、会话下载按钮
+或 `/export` 命令。历史工具内容与结构化验证记录仍可在 Chat 和 Trajectory 中查看。
+Trajectory 顶部的 Prefix 使用紧凑数字，悬停显示完整 token 数；窄屏下搜索栏自动换行。
+不超过 720px 时，左侧会话也通过标题栏菜单按需打开。抽屉和设置弹层支持
+Escape 关闭、Tab 焦点圈定和关闭后恢复焦点，不允许键盘落入被遮挡的主界面。
+
+右上角 Git 悬浮窗默认展示，不占用对话列宽；标题栏的 `Git tools` 可以关闭或重新打开。
+同一 Workspace 内切换 Session 保留开关状态，切换 Workspace 后默认重新展示对应仓库。
+进入 Trajectory 时暂时隐藏浮窗，返回 Chat 后恢复，避免遮挡记录检查区。
+手机端默认使用非模态紧凑摘要，不抢输入焦点；扩大窗口或进入分支、Diff 详情时使用模态视图。
+窗口支持收起、扩大、
+查看实时变更、搜索与切换本地分支。`Changes` 按已暂存/未暂存分类展示文件和逐文件 Diff，
+行数来自 Git 的结构化统计，二进制单独标注，未跟踪文件不计入行数总计。
+Diff 视图使用宽窗口，代码区填满剩余高度；支持展开到近全屏和收起文件列表。
+手机端文件列表与代码上下排列，收起列表可为代码腾出空间。调整视图保留所选文件与滚动位置，
+长 Diff 仍按可见区域虚拟渲染，不因扩大窗口加载全部代码行。
+这些数据属于当前 Workspace，不是最近 Turn 的交付清单。对话不再重复显示 `Produced files`，
+Workspace 行也不再显示分支选择器；历史交付记录仍保留在工具 Diff 和 Trajectory 中，
+任务进度和子 Agent 保持原有位置。
+打开、手动刷新、窗口重新聚焦和活动状态改变时刷新，不持续轮询，也不调用模型来查看 Git。
+
+`Commit or push` 打开操作确认框。默认只提交已暂存文件；包含未暂存文件需要明确勾选，
+推送需要选择命名 Remote。提交说明必填，不使用模型生成。
+`Commit`、`Commit and push`、`Push` 和创建分支直接调用 Runtime 的受限 Git 操作入口，
+由既有 Git Tool、Guard 和 VCS Broker 执行，不创建 Turn、不调用模型，也不写入聊天消息。
+按钮确认只授权本次结构化操作对应的精确工具参数，不覆盖策略或仓库规则中的拒绝项。
+浮窗展示实际 commit hash 和推送结果；提交成功但推送失败时保留提交结果，可单独重试推送。
+网络断开或结果不确定时不自动重试提交，应先刷新 Git 状态。
+不必先创建 Session；若存在当前 Session，则同时遵循其只读和隔离限制。
+不会清空输入框草稿或挪用附件上下文。执行期间 Workspace 不接受新的 Turn 或 Git 操作，
+分支、暂存区或本地 Git 配置已变化的旧请求会被拒绝。操作仅支持仓库根目录的非 detached 分支。
+只读、忙碌、暂停待恢复或隔离 Worktree 会话不允许修改主 Workspace 的 Git 状态，
+也不提供强制推送、Amend、Reset 或丢弃更改的快捷操作。
+
+Session 侧栏按 Workspace 分组。`Add workspace` 是分组标题旁的明确操作；
+每个当前或悬停的 Workspace 行尾提供独立的“对话气泡 +”按钮，新 Session 必须从所属
+Workspace 创建。若按钮属于非当前 Workspace，Web 先切换权威 Runtime，再提交创建请求，
+不会把 Session 错建到当前 Workspace。分支管理统一位于 Git 悬浮窗，低频删除操作渐进披露；
+新 Session 的 Shared/Worktree 默认值在 Settings 中统一配置，不在每个列表项重复显示。
+搜索、归档与 Session 行级操作继续渐进披露。未指定标题的新会话
+先显示 `New Chat`；`turn.start` 被接受后，Runtime 尽早使用 `summary` 路由异步提炼
+“动作 + 核心对象”，并原位更新侧栏，不等待任务结束。模型结果返回前保持 `New Chat`，
+不再把第一条 Prompt 或其截断文本当作标题。命名不添加聊天消息，成功命名后不再反复改名。
+
+标题请求只包含本次用户可见文本与命名规则，不携带系统上下文、附件或工具日志。它共享
+Provider 并发、冷却和会话预算，可以在主任务工具执行期间完成，不受整轮 Engine 锁阻塞。
+主任务失败、Blocked 或取消不取消命名；进程关闭会取消请求。命名失败不回填 Prompt，
+同一 Turn 不重复请求，后续 Turn 可为仍未命名的会话再尝试。取得并发许可后，请求超时复用
+`context.semantic_narrative_timeout`；这与上下文摘要是否启用无关。
+标题以单行、最多 256 个 UTF-8 字节保存，显示宽度由界面省略号处理；不是截取前几个词
+充当摘要。标题 JSON 的字节上限由最坏 Unicode 转义与对象外壳推导，即 `6 × 256 + 12`。
+
+Runtime 显式区分默认、临时、自动和手动标题，并保存独立命名版本；置顶等操作不影响
+命名，显式改名（即使文字未变）会阻止未完成的自动结果覆盖。缺少来源信息的旧会话按
+手动标题保护，不根据 `New Chat` 字样猜测或批量回填。已有 temporary 来源会话可在下一
+Turn 用模型生成的标题替换；已有自动或手动标题保持不变。
+
+对话底部的运行状态栏显示思考、工具准备、工具执行与继续处理等当前阶段。正常的工具
+衔接不再作为聊天卡片显示；限流、重试、输出不完整和真实错误仍保留独立提示。
+
+侧栏的 `Add workspace` 打开 Workspace 管理界面。点击 `Choose folder` 后由本地 Host 打开
 操作系统目录选择器；用户选中的目录由 Supervisor 规范化物理路径、持久化 Registry，
 并为该目录构造独立 Runtime，不需要在浏览器中手工输入路径。HTTP RPC 和内容下载通过
 `X-QCode-Workspace-ID` 路由，WebSocket 在鉴权帧中携带 `workspace_id`；未知
@@ -69,10 +138,12 @@ Workspace、跨 Workspace Session 和内容句柄均拒绝访问。浏览器为�
 Workspace Catalog 和 Session 摘要在页面重新可见时刷新，不持续轮询 Git 状态。
 Trajectory 也由新 Runtime Event 驱动增量 Trace 查询。裸 Supervisor URL 不隐式选择
 默认 Workspace；用户必须先选择一个 Ready Workspace，页面和 Host 才允许创建 Session。
-从项目目录执行 `qcode` 时，启动器会把该目录作为显式 Workspace 参数打开。
+只有 `qcode --workspace PATH` 或显式 Workspace 配置才会让启动器定位到目录。
+首次启动允许零 Workspace，模型连接设置不依赖默认项目；添加目录后才构造其 Runtime。
 Workspace 管理界面可以移除任意 Workspace。移除只会注销并关闭对应 Runtime，不会
 删除本机目录、Git 内容或持久化 Session。移除当前 Workspace 后，Web 自动切换到另一
-个 Ready Workspace；移除最后一个后进入 Workspace 选择空态。所有 Runtime HTTP RPC、
+个 Ready Workspace；移除最后一个后进入 Workspace 选择空态，重启不会自动补回目录。
+已有记录不会依据目录名或路径自动删除，历史 Session 数据保持不变。所有 Runtime HTTP RPC、
 内容下载和 WebSocket 鉴权都必须携带显式 Workspace ID，不存在默认 Workspace 回退。
 Git Workspace 会在侧栏显示当前本地分支，并可从本地分支列表直接切换。切换在沙箱内
 执行，活动 Turn 或待处理 Operation 存在时拒绝；Git 自身仍负责拒绝会覆盖本地修改的
@@ -140,9 +211,11 @@ Composer 下方的 Stats 使用一条可整体省略的摘要展示 Turn、Tool�
 Tool 耗时、TTFT、Token、Cache 和 Cost；完整明细保留在 Tooltip 中，不逐项压缩。
 
 Plan 模式只允许 Workspace Read 与有界的 Session Plan 状态更新。Agent 调研完成后通过
-`submit_plan` 提交带步骤、依赖、预期证据和受影响文件的结构化 JSON 计划。Plan
-Artifact 不接受 Markdown 或 XML 标签输出。计划显示在 Composer 上方，并在当前 Turn
-内自动继续执行，不设置额外的 Plan 审批或执行按钮。提交计划时会记录受影响文件摘要，
+`submit_plan` 提交带步骤、依赖、预期证据和受影响文件的结构化 JSON 计划。`purpose`
+区分两种用途：`execution`（默认）是本次执行计划，`deliverable` 是交付给用户的
+未来方案。只要求补充计划或设计方案时，Agent 使用 `deliverable`；Plan 模式也使用
+该用途。Plan Artifact 不接受 Markdown 或 XML 标签输出。交付方案显示为
+`Proposed plan`，不显示为正在执行的 Tasks。提交计划时会记录受影响文件摘要，
 执行前若文件已变化，Runtime 拒绝旧 Revision 并要求重新规划。
 
 Mode 只提供 `plan`、`act`、`operate` 三项。`act` 与 `operate` 固定使用自适应规划：
@@ -150,7 +223,10 @@ Mode 只提供 `plan`、`act`、`operate` 三项。`act` 与 `operate` 固定使
 网络写、外部写或 Agent 生命周期操作先提交计划。界面不再暴露独立的 Planning
 Policy，避免用户同时选择模式和规划策略。
 
-Plan 提交后始终自动批准；用户无需选择 `Implement` 或 `Autopilot`。提交状态只属于
+执行 Plan 提交后自动批准并继续当前 Turn；用户无需选择 `Implement` 或 `Autopilot`。
+交付 Plan 只保存产物，不授权实施、不覆盖当前执行清单，也不能直接转换为执行。
+用户后续要求实施时，Agent 核对当前状态后另行提交 `purpose=execution` 的计划。
+执行计划的提交状态只属于
 当前 Turn，不写回 Session 默认工具审批姿态。独立 Plan 模式仍使用 Plan 模型路由；
 Act 内规划保持 Turn 已冻结的 Act 路由，不在一次回答中途切换模型。新 Session 默认
 使用 `approval_posture=auto`。Plan Artifact 以执行配置摘要而不是整个 Session
@@ -159,10 +235,12 @@ Profile Revision 判断是否过期；模型、工具集、审批姿态或执行
 
 活动 Plan 的状态变化通过 `update_plan` 立即生成新的 `plan.delta`。步骤签名未变的
 重写会被拒绝，不产生新的 delta。Runtime 不根据文件写入猜测业务步骤是否完成。
-Plan 正文进入 Session State，下一 Turn 仍可 `update_plan` 或按步骤继续实现。仅交付
-计划、没有 Workspace Mutation 的 Turn 可以在步骤仍为 pending 时结束；已经开始改
-仓库时，未完成步骤仍会拒绝普通 `turn_complete`，此时应继续做完剩余步骤或声明
-`incomplete`，而不是反复改同一份计划。
+执行 Plan 正文进入 Session State，下一 Turn 仍可 `update_plan` 或按步骤继续实现；
+`update_plan` 只接受执行用途。交付 Plan 的未来步骤不进入本次完成门禁，
+即使本次写入了计划文档，也可在文档交付与验证完成后正常结束，未来步骤保持 pending。
+已有执行清单的未完成任务不能通过提交交付 Plan 清除；发生修改后仍须完成这些任务或声明
+`incomplete`，而不是反复改同一份计划。Checkpoint 和 Continue/Retry 只恢复原执行清单
+及有效执行授权，不会自动启动交付方案。
 
 创建新 Session 时，Web 会继承当前 Session 的 Approval Posture；因此用户选择 `auto`
 后，新建 Session 不会重新回到 `suggest`。显式的新建参数仍优先于继承值。
@@ -176,24 +254,36 @@ DeepSeek Responses 协议发送图片。支持图片的 Session 会在模型上�
 模型推理在 Chat 中显示为可折叠的 `Think` 行。运行时摘要跟随最新内容，每次模型
 Sample 完成后持久化完整推理，因此重载页面或切换 Session 后仍可恢复多个独立 Think
 段。Read、Bash、Grep/Glob 分别使用带行号的文件面板、Terminal 面板和分组搜索面板；
-文件名与搜索结果路径可通过仅接受当前 Workspace 普通文件的 Host 接口在本机编辑器中
-打开。macOS 默认优先使用 Visual Studio Code；未安装或无法启动 VS Code 时回退到
-系统文本编辑器。Windows 和 Linux 继续使用各自的系统文件打开机制。
+文件名与搜索结果路径仅作为可选取文本显示，不再调用本机编辑器或 VSCode。
+页面内文件预览、内容复制和 Git Diff 保留；目录选择器仍用于添加 Workspace。
 
-Turn 完成后，Chat 默认只保留用户问题和最终结论；推理、Tool、验证和交付记录收进
-可展开的 `Execution details`。运行中的 Turn 保持完整展开。通过会话搜索或 Trajectory
-定位某个 Tool 或文件时，所属 Turn 的执行过程会自动展开。
+复杂任务中，模型可以在常规工具调用前输出简短的阶段说明，报告已确认的发现与下一步。
+这些说明由主模型生成，在该次完整响应被接纳后显示，不从推理文本中截取，也不额外调用
+摘要模型。说明与工具按顺序穿插，`Stage details` 可折叠相邻执行细节，说明本身保持可见。
+工具运行较久或模型尚未完成响应时，继续显示原有运行状态，不虚构阶段结论。
+
+Turn 完成后，Chat 默认只保留用户问题和最终结论；阶段说明、推理、Tool、验证和交付记录
+收进可展开的 `Execution details`。最终结论不会替换阶段说明。运行中的 Turn 默认展开。
+通过会话搜索或 Trajectory 定位阶段说明、Tool 或文件时，所属执行过程及分组会自动展开。
+重载页面、取消或失败后，已确认的阶段说明仍可恢复；它们不代表任务已完成或验证通过。
 
 最终回答支持 GFM 表格、CJK 相邻强调、行内与块级数学公式、引用、嵌套列表、图片和
-带语言标识的代码块。宽表格与长代码只在各自区域滚动；Markdown 文件链接通过
-Workspace-bound `workspace/open` 打开。同源图片可直接显示，跨域图片必须由用户
+带语言标识的代码块。宽表格与长代码只在各自区域滚动；Markdown 文件引用显示为静态
+路径标识，Host 不再暴露 `workspace/open` 或外部编辑器能力。同源图片可直接显示，跨域图片必须由用户
 显式加载且只允许 HTTPS；图片提供尺寸约束、加载失败、重试和下载动作。
 
 Conversation Header 显示当前用户问题位置，并提供上一个、下一个问题和会话内搜索动作。
-搜索面板可按 Turn、问题、Tool 或文件过滤；命中项使用 Runtime 派生的稳定
+搜索面板可按 Turn、问题、阶段说明（`Updates`）、Tool 或文件过滤；命中项使用 Runtime 派生的稳定
 Entry、Turn、Call 和 Path Identity 定位。Chat 与 Trajectory 往返、切换 Session、
 加载更早历史或展开 Tool 时，页面会保留当前语义阅读锚点。Transcript 使用最多
-200 个业务节点的重叠分页窗口，避免长会话无限扩张 DOM。
+200 个业务节点的重叠滑动窗口，避免长会话无限扩张 DOM。向上滚动时自动显示或读取
+更早历史，向下滚动时自动显示后续消息，不再显示 `Earlier messages` / `Newer messages`
+分页按钮。加载期间保留当前可见消息及其视口位置；浏览旧消息时，新输出不会强制拉回底部，
+`Back to bottom` 会切回最新窗口并继续跟随输出。
+
+同一 Session 的并发历史读取会合并；切换 Session 或 Workspace 后取消请求并丢弃迟到结果。
+历史页未推进 Cursor 时停止加载，避免无限请求。读取失败只展示错误与重试图标，
+不会自动反复重试；离开 Chat 或页面进入后台时不触发自动历史加载。
 
 Runtime 连接中断时，页面立即停止当前 Turn 的运行计时和操作控件，显示连接中断提示，
 并禁止继续提交。自动重连会重新读取 Runtime 的持久化状态，以确认该 Turn 实际为
@@ -205,7 +295,7 @@ Runtime 连接中断时，页面立即停止当前 Turn 的运行计时和操作
 `not_evaluated` 表示没有足够的执行事实。Trajectory 直接显示该结果；它不推测或伪造
 模型未委派的自然语言理由。
 
-Chat 会把每个 Child 的状态、推理摘要、Tool 调用和最终结果聚合为可展开的 Subagent
+Chat 会把每个 Child 的状态、阶段说明、推理摘要、Tool 调用和最终结果聚合为可展开的 Subagent
 执行块；运行中或失败的执行块默认展开，完成后可折叠。失败卡展示稳定原因
 （如 `budget exhausted`、`provider rate limited`）以及输入/输出 token 用量，避免只
 留下 `2 unresolved` 这类摘要。刷新或重连时，这些内容从同一组 Runtime Event 恢复。
@@ -231,13 +321,18 @@ Journal 草稿；仍有内存执行者或恢复中 Operation 的 Session 会拒�
 `Continue` 会接管该草稿，`Retry` 会先回滚再开新 Turn。Journal 准入失败的
 Turn 即使没有 `turn.started`，这两类恢复仍然有效。
 
+删除成功后，所属 Turn 的状态事实、终态记录和待发布记录会与 Session 一起原子清理，
+不会留下失去所属 Turn 的 Kernel 状态。审计事件及其序号仍保留；被过滤的流式事件
+对应的 `abandoned` 预留也可能是正常序号记录，不应作为孤儿状态直接删除。
+
 Agent 明确声明任务尚未完成并提供后续动作时，Session 显示为黄色 `Blocked`，保留
 Workspace 变更并允许 `Continue`。该状态不同于红色 `Failed`，也不同于用户主动暂停
 产生的 `Paused`。Blocked Session 没有活动 Turn 时，Composer 的发送动作显示为
 `Continue`，输入内容作为新 Turn 的真实 User Prompt 与 Work Item Goal，并通过
 Source Turn 关系绑定到最新可恢复 Turn；模型上下文只注入短胶囊（源 Turn、
 terminal、Known/Open、工具结论），不会递归拼接旧输入或把源请求整封当作本轮
-Goal。源 Turn 已读路径在开局写入 KnownReads，整文件重读与 git 巡视会被拒绝。
+Goal。源 Turn 已读路径在开局写入 KnownReads；覆盖范围内的重读回放原结果，
+无法回放时放行，git 巡视不再被拒。
 恢复请求提交后按钮保持 Pending，直到 Runtime 发布新 Turn 或明确拒绝请求。
 
 ## 配置与凭证

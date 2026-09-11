@@ -300,7 +300,11 @@ func (t *mutationTool) run(
 	case "git_add":
 		err = validatePaths(input.Paths)
 		if err == nil {
-			err = t.runtime.AddIndex(ctx, t.root, input.Paths)
+			paths := make([]string, len(input.Paths))
+			for index, path := range input.Paths {
+				paths[index] = ":(literal)" + path
+			}
+			err = t.runtime.AddIndex(ctx, t.root, paths)
 		}
 	case "git_commit":
 		if strings.TrimSpace(input.Message) == "" {

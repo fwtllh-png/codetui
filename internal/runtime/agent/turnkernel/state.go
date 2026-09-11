@@ -139,6 +139,8 @@ const (
 
 type ProgressState struct {
 	Signature         string        `json:"signature,omitempty"`
+	SampleIdentity    string        `json:"sample_identity,omitempty"`
+	PendingIdentity   string        `json:"pending_identity,omitempty"`
 	ObservedSamples   uint32        `json:"observed_samples"`
 	NoProgressSamples uint32        `json:"no_progress_samples"`
 	Stage             ProgressStage `json:"stage,omitempty"`
@@ -179,9 +181,10 @@ type Policy struct {
 	ExecutionStepLimit uint32            `json:"execution_step_limit,omitempty"`
 	JournalRequired    bool              `json:"journal_required"`
 	Convergence        ConvergencePolicy `json:"convergence"`
-	// ImplementNoProgressSamples is the public no-progress finish-only lease
-	// used once a Work Item has Known or Open facts. Zero inherits the
-	// MaxSteps-derived 2/3 finish-only lease.
+	// ImplementNoProgressSamples is the public finish-only lease for
+	// consecutive Samples that repeat the same tool-call identity. Zero
+	// inherits the MaxSteps-derived 2/3 finish-only lease. Distinct
+	// tool arguments on the same Work Item path set are not a stall.
 	ImplementNoProgressSamples uint32 `json:"implement_no_progress_samples,omitempty"`
 }
 
@@ -197,11 +200,6 @@ func ConvergencePolicyForStepLimit(limit uint32) ConvergencePolicy {
 		ResearchFinishOnly: finishOnly, ResearchLimit: limit,
 	}
 }
-
-// RequiredActionFinishOrDeclareIncomplete is the only legal next step after
-// a mutated Turn is refused for open Plan steps. Rewriting the same Plan
-// does not satisfy the contract.
-const RequiredActionFinishOrDeclareIncomplete = "finish_open_plan_steps_or_declare_incomplete"
 
 func DefaultPolicy() Policy {
 	return Policy{
@@ -308,6 +306,12 @@ type ModelSampleState struct {
 	Error           string                             `json:"error,omitempty"`
 }
 
+type Commentary struct {
+	SampleID string   `json:"sample_id"`
+	Text     string   `json:"text"`
+	CallIDs  []string `json:"call_ids"`
+}
+
 type ProviderRetryState struct {
 	EffectID         string    `json:"effect_id"`
 	Attempt          uint32    `json:"attempt"`
@@ -357,6 +361,7 @@ type State struct {
 	NextEffectSequence    uint64                      `json:"next_effect_sequence"`
 	ProvisionalOutput     []string                    `json:"provisional_output,omitempty"`
 	FinalOutput           []string                    `json:"final_output,omitempty"`
+	Commentary            []Commentary                `json:"commentary,omitempty"`
 	OutputEligibility     bool                        `json:"output_eligibility"`
 	RepairBudgets         map[RepairKind]RepairBudget `json:"repair_budgets"`
 	Progress              ProgressState               `json:"progress"`
@@ -413,19 +418,10 @@ func NewStateWithPolicy(
 }
 
 func RequiresCompletion(state State) bool {
-	if !state.Policy.CompletionRequired {
-		return false
-	}
-	if state.Policy.StructuredTerminalRequired {
-		return true
-	}
-	required := state.MutationRevision != 0 ||
-		state.Intent == protocol.TurnIntentWorkspaceChange
-	for _, result := range state.ClosedCalls {
-		required = required ||
-			!result.IsError && result.Name != "request_user_input"
-	}
-	return required
+	// Structured terminal is opt-in. Tool use and mutations stop when the
+	// model writes a no-tool answer; turn_complete is optional.
+	return state.Policy.CompletionRequired &&
+		state.Policy.StructuredTerminalRequired
 }
 
 func IsResearchIntent(intent protocol.TurnIntent) bool {

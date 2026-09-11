@@ -15,6 +15,10 @@ func ValidateExternalStateDirectory(workspace, dataDir string) (string, error) {
 	return sandbox.ExternalStateDirectory(workspace, dataDir)
 }
 
+func ResolveSupervisorStateDirectory(dataDir string) (string, error) {
+	return sandbox.CanonicalStateDirectory(dataDir)
+}
+
 func securityStateDataDir(state *buildState) string {
 	if state.options.PersistentStore != nil {
 		return state.options.PersistentStore.Root()

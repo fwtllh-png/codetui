@@ -82,6 +82,23 @@ describe("projectTranscript", () => {
     ]);
   });
 
+  it("claims an automatic title when rename confirms the same text", async () => {
+    const value = snapshot();
+    const session = {...value.sessions[0]!, title_source: "auto" as const, title_revision: 3};
+    const client = mockClient({...value, sessions: [session]});
+    const prompt = vi.spyOn(window, "prompt").mockReturnValue(session.title);
+    try {
+      render(<App client={client} />);
+      fireEvent.click(screen.getByRole("button", {name: `Session actions for ${session.title}`}));
+      fireEvent.click(screen.getByRole("menuitem", {name: "Rename"}));
+      await waitFor(() => expect(client.updateSession).toHaveBeenCalledWith(
+        session.session_id, session.revision, {title: session.title}
+      ));
+    } finally {
+      prompt.mockRestore();
+    }
+  });
+
   it("projects verification, receipt, and rejection evidence", () => {
     const entries = projectTranscript([
       event(1, "turn.verification", {verdict: "passed"}),
@@ -289,14 +306,14 @@ describe("projectTranscript", () => {
   it("renders lifecycle, workspace, profile, and governed tool controls", async () => {
     const client = mockClient(snapshot());
     render(<App client={client} />);
-    expect(screen.getByRole("button", {name: "New chat"}).textContent)
-      .toContain("New session");
+    expect(screen.getByRole("button", {name: "New session in workspace"})).toBeTruthy();
+    expect(screen.getByRole("button", {name: "Add workspace"}).textContent)
+      .toContain("Add workspace");
     expect(screen.getByRole("button", {name: /^workspace/})).toBeTruthy();
     fireEvent.click(screen.getByRole("button", {name: "Search sessions"}));
     expect(screen.getByRole("textbox", {name: "Search sessions"})).toBeTruthy();
     await openContextDetails();
 
-    expect(screen.getByLabelText("New session isolation")).toBeTruthy();
     expect(screen.getByRole("dialog", {name: "Add context"})).toBeTruthy();
     expect(screen.queryByLabelText("Session details")).toBeNull();
     fireEvent.click(screen.getByRole("button", {name: "Close context browser"}));
@@ -490,7 +507,7 @@ describe("projectTranscript", () => {
     });
   });
 
-  it("shows and switches the current Git branch", async () => {
+  it("shows Git tools by default and switches branches without a sidebar selector", async () => {
     const value = snapshot();
     value.workspaces[0]!.git = {
       repository: true,
@@ -500,16 +517,39 @@ describe("projectTranscript", () => {
     const client = mockClient(value);
     render(<App client={client} />);
 
-    fireEvent.change(screen.getByLabelText("Branch for workspace"), {
-      target: {value: "feature"}
-    });
+    const panel = await screen.findByRole("complementary", {name: "Git tools"});
+    expect(screen.queryByLabelText("Branch for workspace")).toBeNull();
+    fireEvent.click(await within(panel).findByRole("button", {name: "main"}));
+    fireEvent.click(within(panel).getByRole("button", {name: "feature"}));
     await waitFor(() => {
       expect(client.switchWorkspaceBranch)
         .toHaveBeenCalledWith("workspace-id", "feature");
     });
   });
 
-  it("summarizes branch conflicts and keeps technical details collapsed", async () => {
+  it("keeps Git dismissal within a Workspace and reopens for another Workspace", async () => {
+    const value = snapshot();
+    const client = mockClient(value);
+    const view = render(<App client={client} />);
+    const panel = await screen.findByRole("complementary", {name: "Git tools"});
+    fireEvent.click(within(panel).getByRole("button", {name: "Close Git tools"}));
+    await waitFor(() => expect(screen.queryByRole("complementary", {name: "Git tools"})).toBeNull());
+    const nextSession = {...value, selectedSessionID: "session-other"};
+    view.rerender(<App client={mockClient(nextSession)} />);
+    expect(screen.queryByRole("complementary", {name: "Git tools"})).toBeNull();
+    const workspace = {
+      ...value.workspaces[0]!, id: "workspace-other", root: "/other", label: "other"
+    };
+    const nextClient = mockClient({
+      ...nextSession, workspaces: [...value.workspaces, workspace], selectedWorkspaceID: workspace.id
+    });
+    view.rerender(<App client={nextClient} />);
+    const nextPanel = await screen.findByRole("complementary", {name: "Git tools"});
+    expect(nextPanel.textContent).toContain("other");
+    await waitFor(() => expect(nextClient.gitOverview).toHaveBeenCalledWith("workspace-other", expect.any(AbortSignal)));
+  });
+
+  it("keeps branch conflicts visible in Git tools", async () => {
     const value = snapshot();
     value.workspaces[0]!.git = {
       repository: true,
@@ -523,15 +563,12 @@ describe("projectTranscript", () => {
     ));
     render(<App client={client} />);
 
-    fireEvent.change(screen.getByLabelText("Branch for workspace"), {
-      target: {value: "feature"}
-    });
-
+    const panel = await screen.findByRole("complementary", {name: "Git tools"});
+    fireEvent.click(await within(panel).findByRole("button", {name: "main"}));
+    fireEvent.click(within(panel).getByRole("button", {name: "feature"}));
     const alert = await screen.findByRole("alert");
-    expect(alert.textContent).toContain("Branch not switched");
-    expect(alert.textContent).toContain("Commit or stash local changes");
-    fireEvent.click(screen.getByRole("button", {name: "Dismiss error"}));
-    expect(screen.queryByRole("alert")).toBeNull();
+    expect(alert.textContent).toContain("README.md would be overwritten");
+    expect(within(panel).getByRole("searchbox", {name: "Search Git branches"})).toBeTruthy();
   });
 
   it("switches Session models from the composer and opens new model settings", async () => {
@@ -878,6 +915,32 @@ describe("projectTranscript", () => {
     await waitFor(() => {
       expect(client.createSession).toHaveBeenCalledWith("shared", undefined);
     });
+  });
+
+  it("creates a session from its owning Workspace instead of the current Workspace", async () => {
+    const value = snapshot();
+    value.workspaces = [
+      ...value.workspaces,
+      {
+        id: "workspace-secondary",
+        root: "/workspace/secondary",
+        label: "secondary",
+        ready: true,
+        removable: true,
+        session_count: 0
+      }
+    ];
+    const client = mockClient(value);
+    render(<App client={client} />);
+
+    fireEvent.click(screen.getByRole("button", {name: "New session in secondary"}));
+
+    await waitFor(() => {
+      expect(client.selectWorkspace).toHaveBeenCalledWith("workspace-secondary");
+      expect(client.createSession).toHaveBeenCalledWith("shared", undefined);
+    });
+    expect(vi.mocked(client.selectWorkspace).mock.invocationCallOrder[0])
+      .toBeLessThan(vi.mocked(client.createSession).mock.invocationCallOrder[0]);
   });
 
   it("guides Workspace selection before creating a session", () => {
@@ -1713,6 +1776,7 @@ describe("projectTranscript", () => {
     expect(completedView.container.querySelector(".diffFooter")?.textContent)
       .toBe("+1 -1 · 1 file");
     expect(screen.getByText("const enabled = true;")).toBeTruthy();
+    expect(screen.queryByRole("region", {name: "Produced files"})).toBeNull();
   });
 
   it("resets approval submission state for a new request id", async () => {
@@ -1904,7 +1968,7 @@ describe("projectTranscript", () => {
     }));
     render(<App client={mockClient(value)} />);
 
-    expect(screen.getByRole("status").textContent).toContain("Paused");
+    expect(screen.getByText("Paused", {selector: '[role="status"]'})).toBeTruthy();
     expect(document.title).toBe("(1) Paused · QCode");
     expect(screen.queryByRole("button", {name: "Stop turn"})).toBeNull();
   });
@@ -1925,10 +1989,23 @@ describe("projectTranscript", () => {
 
     expect(screen.getByRole("heading", {name: "Runtime unavailable"})).toBeTruthy();
     expect(screen.getByText("Connection interrupted.")).toBeTruthy();
-    expect(screen.queryByText("Deep diving...")).toBeNull();
+    expect(document.querySelector(".turnStatus")).toBeNull();
     expect(screen.queryByText("Working")).toBeNull();
     expect(screen.queryByRole("button", {name: "Stop turn"})).toBeNull();
     expect(screen.queryByPlaceholderText("Ask QCode")).toBeNull();
+  });
+
+  it("keeps normal tool continuation in the status bar, not a chat card", () => {
+    const value = snapshot([
+      event(1, "turn.started", {display_prompt: "Inspect"}),
+      event(2, "provider.attempt", {status: "completed", stop_reason: "tool_use"}),
+      event(3, "tool.start", {call_id: "read", tool: "file_read", arguments: {path: "README.md"}}),
+      event(4, "tool.result", {call_id: "read", tool: "file_read", output: "Read complete"})
+    ]);
+    render(<App client={mockClient(value)} />);
+    expect(document.querySelector(".turnStatus")?.textContent).toContain("Continuing...");
+    expect(screen.queryByText("Continuing this turn")).toBeNull();
+    expect(screen.queryByText("Tool finished. Continuing the same turn.")).toBeNull();
   });
 
   it("queues Enter during an active turn and exposes queue item actions", async () => {
@@ -2015,8 +2092,8 @@ describe("projectTranscript", () => {
     expect(container.querySelector("[data-read]")).toBeTruthy();
     expect(screen.getByText("41")).toBeTruthy();
     expect(screen.getByText("first line")).toBeTruthy();
-    fireEvent.click(screen.getAllByRole("button", {name: "README.md"})[0]!);
-    expect(client.openWorkspacePath).toHaveBeenCalledWith("README.md");
+    expect(screen.queryByRole("button", {name: "README.md"})).toBeNull();
+    expect(container.querySelector(".surfaceFileLabel")?.textContent).toBe("README.md");
   });
 
   it("collapses completed turn execution while keeping its final conclusion visible", () => {
@@ -2052,6 +2129,35 @@ describe("projectTranscript", () => {
     expect(toggle.getAttribute("aria-expanded")).toBe("true");
     expect(screen.getByText("Checking the repository")).toBeTruthy();
     expect(screen.getByRole("button", {name: /Read README\.md/})).toBeTruthy();
+  });
+
+  it("keeps commentary in completed execution and reveals it through conversation search", async () => {
+    const value = snapshot([
+      event(1, "turn.started", {display_prompt: "Inspect"}),
+      event(2, "commentary.completed", {
+        message_id: "message", sample_id: "sample", text: "Located the dispatch handler.",
+        call_ids: ["call"]
+      }),
+      event(3, "tool.start", {call_id: "call", tool: "file_read", arguments: {path: "main.go"}}),
+      event(4, "tool.result", {call_id: "call", output: "package main", is_error: false}),
+      event(5, "turn.completed", {text: "Repository inspected"})
+    ]);
+    const {container} = render(<App client={mockClient(value)} />);
+    expect(screen.queryByText("Located the dispatch handler.")).toBeNull();
+    fireEvent.click(screen.getByRole("button", {name: /Execution details/}));
+    expect(await screen.findByText("Located the dispatch handler.")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", {name: /Stage details/}));
+    expect(screen.queryByRole("button", {name: /Read main.go/})).toBeNull();
+    expect(screen.getByText("Repository inspected")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", {name: /Execution details/}));
+    fireEvent.click(screen.getByRole("button", {name: "Search conversation"}));
+    fireEvent.change(await screen.findByRole("combobox", {name: "Search conversation"}), {
+      target: {value: "dispatch handler"}
+    });
+    fireEvent.click(screen.getByRole("option", {name: /Located the dispatch handler/}));
+    await waitFor(() => expect(container.querySelector(".commentaryMessage")?.textContent)
+      .toContain("Located the dispatch handler."));
+    expect(container.querySelectorAll(".commentaryMessage")).toHaveLength(1);
   });
 
   it("renders Bash output and grouped Grep results as dedicated cards", () => {
@@ -2201,8 +2307,8 @@ describe("projectTranscript", () => {
       .toHaveProperty("disabled", true);
     expect(screen.getByRole("button", {name: "Attach files"}))
       .toHaveProperty("disabled", true);
-    expect(screen.getByRole("button", {name: "Export session"}))
-      .toHaveProperty("disabled", true);
+    expect(screen.queryByRole("button", {name: "Export session"})).toBeNull();
+    expect(screen.queryByRole("button", {name: "Session inspector"})).toBeNull();
   });
 
   it("opens external Markdown links safely and gates remote images", async () => {
@@ -2648,7 +2754,7 @@ describe("projectTranscript", () => {
     });
   });
 
-  it("windows 500-turn transcripts to 200 projected rows with older and newer navigation", () => {
+  it("windows 500-turn transcripts to 200 projected rows with automatic history scrolling", async () => {
     const events = Array.from({length: 500}, (_, index) => ({
       ...event(index + 1, "turn.completed", {
         text: `message-${index + 1}`,
@@ -2663,11 +2769,103 @@ describe("projectTranscript", () => {
     expect(screen.getByText("message-301")).toBeTruthy();
     expect(screen.getByText("message-500")).toBeTruthy();
 
-    fireEvent.click(screen.getByRole("button", {name: "Earlier messages"}));
+    const scrollport = mockTranscriptViewport(container);
+    fireEvent.scroll(scrollport, {target: {scrollTop: 4_000}});
+    fireEvent.scroll(scrollport, {target: {scrollTop: 0}});
+    await waitFor(() => expect(screen.getByText("message-300")).toBeTruthy());
+    expect(container.querySelectorAll(".assistantMessage, .terminalState")).toHaveLength(200);
+    expect(screen.queryByText("message-500")).toBeNull();
+    expect(screen.queryByRole("button", {name: "Earlier messages"})).toBeNull();
+    expect(screen.queryByRole("button", {name: "Newer messages"})).toBeNull();
+    const anchor = screen.getByText("message-301").closest<HTMLElement>("[data-entry-id]")!;
+    expect(anchor.getBoundingClientRect().top).toBe(0);
+
+    fireEvent.scroll(scrollport, {target: {scrollTop: scrollport.scrollHeight - scrollport.clientHeight}});
+    await waitFor(() => expect(screen.getByText("message-500")).toBeTruthy());
+    expect(container.querySelectorAll(".assistantMessage, .terminalState")).toHaveLength(200);
+  });
+
+  it("pins older entries during new output and returns to the latest window", async () => {
+    const events = Array.from({length: 500}, (_, index) => ({
+      ...event(index + 1, "turn.completed", {text: `message-${index + 1}`, outcome: "answered"}),
+      turn_id: `turn-${index + 1}`
+    }));
+    const value = snapshot(events);
+    const client = mockClient(value);
+    const view = render(<App client={client} />);
+    const scrollport = mockTranscriptViewport(view.container);
+    fireEvent.scroll(scrollport, {target: {scrollTop: 4_000}});
+    fireEvent.scroll(scrollport, {target: {scrollTop: 0}});
+    await waitFor(() => expect(screen.getByText("message-300")).toBeTruthy());
+    const top = scrollport.scrollTop;
+    const newer = {...event(501, "turn.completed", {text: "new live answer"}), turn_id: "turn-501"};
+    value.events = [...events, newer];
+    value.conversation = projectConversation(value.events);
+    view.rerender(<App client={client} />);
     expect(screen.getByText("message-300")).toBeTruthy();
-    expect(screen.getByRole("button", {name: "Newer messages"})).toBeTruthy();
+    expect(screen.queryByText("new live answer")).toBeNull();
+    expect(scrollport.scrollTop).toBe(top);
+    fireEvent.click(screen.getByRole("button", {name: "Back to bottom"}));
+    await waitFor(() => expect(screen.getByText("new live answer")).toBeTruthy());
+    expect(view.container.querySelectorAll(".assistantMessage, .terminalState")).toHaveLength(200);
+  });
+
+  it("loads history once at the top and waits for explicit retry after failure", async () => {
+    const events = Array.from({length: 40}, (_, index) => ({
+      ...event(index + 101, "turn.completed", {text: `message-${index + 101}`}),
+      turn_id: `turn-${index + 101}`
+    }));
+    const value = snapshot(events);
+    value.historyMoreBefore = true;
+    const client = mockClient(value);
+    let rejectLoad!: (error: Error) => void;
+    vi.mocked(client.loadEarlierHistory).mockImplementationOnce(() => new Promise<number>((_resolve, reject) => {
+      rejectLoad = reject;
+    }));
+    const view = render(<App client={client} />);
+    const scrollport = mockTranscriptViewport(view.container);
+    fireEvent.scroll(scrollport, {target: {scrollTop: 800}});
+    fireEvent.scroll(scrollport, {target: {scrollTop: 0}});
+    await waitFor(() => expect(client.loadEarlierHistory).toHaveBeenCalledTimes(1));
+    expect(screen.getByRole("status", {name: "Loading earlier messages"})).toBeTruthy();
+    fireEvent.scroll(scrollport);
+    fireEvent.scroll(scrollport);
+    await act(async () => rejectLoad(new Error("Offline")));
+    expect(await screen.findByRole("button", {name: "Retry loading history"})).toBeTruthy();
+    fireEvent.scroll(scrollport);
+    expect(client.loadEarlierHistory).toHaveBeenCalledTimes(1);
+    vi.mocked(client.loadEarlierHistory).mockImplementationOnce(async () => {
+      value.historyMoreBefore = false;
+      return 0;
+    });
+    fireEvent.click(screen.getByRole("button", {name: "Retry loading history"}));
+    await waitFor(() => expect(client.loadEarlierHistory).toHaveBeenCalledTimes(2));
+    expect(screen.queryByText("Offline")).toBeNull();
   });
 });
+
+function mockTranscriptViewport(container: HTMLElement): HTMLElement {
+  const scrollport = container.querySelector<HTMLElement>("[data-conversation-scroll]")!;
+  Object.defineProperty(scrollport, "clientHeight", {configurable: true, value: 400});
+  Object.defineProperty(scrollport, "scrollHeight", {
+    configurable: true,
+    get: () => scrollport.querySelectorAll("[data-entry-id]").length * 40
+  });
+  let scrollTop = 0;
+  Object.defineProperty(scrollport, "scrollTop", {
+    configurable: true,
+    get: () => scrollTop,
+    set: (value: number) => { scrollTop = Math.max(0, Math.min(value, scrollport.scrollHeight - 400)); }
+  });
+  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+    if (this === scrollport) return new DOMRect(0, 0, 800, 400);
+    if (this.hasAttribute("data-composer-seat")) return new DOMRect(0, 350, 800, 50);
+    const anchor = this.closest("[data-entry-id]");
+    const index = Array.from(scrollport.querySelectorAll("[data-entry-id]")).indexOf(anchor!);
+    return new DOMRect(0, index * 40 - scrollTop, 800, index >= 0 ? 40 : 0);
+  });
+  return scrollport;
+}
 
 function snapshot(events: RuntimeEvent[] = []): RuntimeSnapshot {
   const session: SessionSummary = {
@@ -2696,7 +2894,6 @@ function snapshot(events: RuntimeEvent[] = []): RuntimeSnapshot {
   return {
     phase: "ready",
     workspaceRoot: "/workspace",
-    canOpenPath: true,
     includeArchived: false,
     contextResources: [],
     messageFeedback: {},
@@ -2814,6 +3011,7 @@ function mockClient(value: RuntimeSnapshot): RuntimeClient {
     getSnapshot: () => value,
     start: vi.fn(async () => {}),
     stop: vi.fn(),
+    loadEarlierHistory: vi.fn(async () => 0),
     refreshSessions: vi.fn(async () => {}),
 		refreshWorkspaces: vi.fn(async () => ({
 			version: 1,
@@ -2826,6 +3024,12 @@ function mockClient(value: RuntimeSnapshot): RuntimeClient {
 		})),
 		selectWorkspace: vi.fn(async () => {}),
     switchWorkspaceBranch: vi.fn(async () => {}),
+    gitOverview: vi.fn(async (workspaceID: string) => ({
+      repository: false,
+      ...value.workspaces.find((workspace) => workspace.id === workspaceID)?.git,
+      files: [],
+      remotes: []
+    })),
     setArchivedVisible: vi.fn(async () => {}),
     createSession: vi.fn(async () => {}),
 		completeSetup: vi.fn(async () => {}),
@@ -2967,10 +3171,6 @@ function mockClient(value: RuntimeSnapshot): RuntimeClient {
       digest: "0".repeat(64),
       bytes: 0,
       content_handle: "content"
-    })),
-    openWorkspacePath: vi.fn(async (path: string) => ({
-      opened: true as const,
-      path
     })),
     readWorkspaceImage: vi.fn(async () => {
       throw new Error("image not configured");

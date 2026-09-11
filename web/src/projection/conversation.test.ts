@@ -29,6 +29,48 @@ describe("ConversationProjection", () => {
     });
   });
 
+  it("hides post-turn narrative maintenance from the transcript", () => {
+    const snapshot = projectConversation([
+      event(1, "turn.compaction", {
+        phase: "post_turn",
+        status: "fallback",
+        mode: "post_turn",
+        summary: "semantic narrative unavailable; retained deterministic truth and raw tail",
+        fallback_reason: "narrative provider output is incomplete"
+      }),
+      event(2, "turn.compaction", {
+        phase: "post_turn",
+        status: "completed",
+        mode: "post_turn",
+        summary: "semantic narrative committed for the compacted context",
+        narrative_included: true
+      })
+    ]);
+
+    expect(snapshot.order
+      .map((id) => snapshot.nodes.get(id))
+      .filter((node) => node?.kind === "context")).toEqual([]);
+  });
+
+  it("still shows in-turn history replacement", () => {
+    const snapshot = projectConversation([
+      event(1, "turn.compaction", {
+        phase: "mid_turn",
+        status: "completed",
+        summary: "compacted history",
+        removed_messages: 8,
+        original_bytes: 32000,
+        retained_bytes: 12000
+      })
+    ]);
+
+    expect(snapshot.nodes.get(snapshot.order[0])).toMatchObject({
+      kind: "context",
+      title: "Compaction",
+      summary: "compacted history"
+    });
+  });
+
   it("replaces intermediate verification with the final verdict", () => {
     const snapshot = projectConversation([
       event(1, "turn.verification", {status: "unavailable", action: "repair"}),
@@ -212,14 +254,7 @@ describe("ConversationProjection", () => {
         output: "# Project"
       })
     ]);
-    const status = snapshot.nodes.get("provider-state-turn-one");
-    expect(status).toMatchObject({
-      kind: "status",
-      title: "Continuing this turn",
-      text: "Tool finished. Continuing the same turn.",
-      failed: false,
-      warning: false
-    });
+    expect(snapshot.nodes.has("provider-state-turn-one")).toBe(false);
   });
 
   it("does not treat model cut-off prose as a runtime state", () => {
@@ -235,10 +270,34 @@ describe("ConversationProjection", () => {
       })
     ]);
     const status = [...snapshot.nodes.values()].filter((node) => node.kind === "status");
-    expect(status).toMatchObject([{
-      title: "Continuing this turn",
-      text: "Tool call requested. This is a normal sample boundary, not a truncated message."
-    }]);
+    expect(status).toEqual([]);
+  });
+
+  it("projects normal tool boundaries only into the running status", () => {
+    const projection = new ConversationProjection();
+    projection.apply(turnEvent(1, "turn-one", "turn.started", {prompt: "Inspect"}));
+    projection.apply(turnEvent(2, "turn-one", "provider.attempt", {
+      status: "completed", stop_reason: "tool_use"
+    }));
+    expect(projection.snapshot().activeStatus).toBe("Preparing tools...");
+    projection.apply(turnEvent(3, "turn-one", "tool.start", {call_id: "a", tool: "file_read"}));
+    projection.apply(turnEvent(4, "turn-one", "tool.start", {call_id: "b", tool: "file_read"}));
+    expect(projection.snapshot().activeStatus).toBe("Running tools...");
+    projection.apply(turnEvent(5, "turn-one", "tool.result", {call_id: "a", tool: "file_read"}));
+    expect(projection.snapshot().activeStatus).toBe("Running tools...");
+    projection.apply(turnEvent(6, "turn-one", "tool.result", {call_id: "b", tool: "file_read"}));
+    const continued = projection.snapshot();
+    expect(continued.activeStatus).toBe("Continuing...");
+    expect([...continued.nodes.values()].some((node) => node.kind === "status")).toBe(false);
+    projection.apply(turnEvent(7, "turn-one", "provider.attempt", {
+      status: "retry_wait", failure_code: "rate_limit"
+    }));
+    expect(projection.snapshot().nodes.get("provider-state-turn-one")).toMatchObject({
+      warning: true, title: "Provider rate limited"
+    });
+    projection.apply(turnEvent(8, "turn-one", "turn.completed", {text: "Done"}));
+    expect(projection.snapshot().activeStatus).toBeUndefined();
+    expect(projection.snapshot().nodes.has("provider-state-turn-one")).toBe(false);
   });
 
   it("presents a user interruption as paused rather than failed", () => {
@@ -254,6 +313,23 @@ describe("ConversationProjection", () => {
       warning: true,
       recoverable: true
     });
+  });
+
+  it("restores running status after approvals and input resolve", () => {
+    const projection = new ConversationProjection();
+    projection.apply(event(1, "turn.started", {prompt: "Inspect"}));
+    projection.apply(event(2, "tool.start", {call_id: "a", tool: "shell"}));
+    projection.apply(event(3, "approval.required", {request_id: "one", call_id: "a"}));
+    projection.apply(event(4, "approval.required", {request_id: "two", call_id: "a"}));
+    projection.apply(event(5, "approval.resolved", {request_id: "one", decision: "allow"}));
+    expect(projection.snapshot().activeStatus).toBe("Awaiting approval...");
+    projection.apply(event(6, "approval.resolved", {request_id: "two", decision: "allow"}));
+    expect(projection.snapshot().activeStatus).toBe("Running tools...");
+    projection.apply(event(7, "input.required", {request_id: "input"}));
+    projection.apply(event(8, "tool.result", {call_id: "a"}));
+    expect(projection.snapshot().activeStatus).toBe("Waiting for input...");
+    projection.apply(event(9, "input.resolved", {request_id: "input"}));
+    expect(projection.snapshot().activeStatus).toBe("Continuing...");
   });
 
   it("projects produced files and marks older paths stale", () => {

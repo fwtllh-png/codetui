@@ -19,6 +19,7 @@ import (
 	"github.com/fwtllh-png/QCode/internal/platform/repowalk"
 	agentcontext "github.com/fwtllh-png/QCode/internal/runtime/agent/context"
 	promptcontext "github.com/fwtllh-png/QCode/internal/runtime/agent/prompt"
+	"github.com/fwtllh-png/QCode/internal/runtime/protocol"
 	"github.com/fwtllh-png/QCode/internal/security/sandbox"
 )
 
@@ -158,8 +159,9 @@ func (e *executor) Descriptor() tool.Descriptor {
 			"evidence is complete; do not defer status updates until Turn completion."
 		if e.name == "submit_plan" {
 			description = "Submit a structured, user-reviewable implementation plan. " +
-				"Use independently verifiable steps in plan mode or when the active " +
-				"planning policy requires a plan."
+				"Use purpose=deliverable when the user only requested a plan for later " +
+				"implementation; it does not replace the working plan or authorize execution. " +
+				"Use purpose=execution (default) for work to execute in the current Turn."
 		}
 		return tool.Descriptor{
 			Name: e.name, Description: description,
@@ -174,7 +176,11 @@ func (e *executor) Descriptor() tool.Descriptor {
 				"type": "object",
 				"properties": map[string]any{
 					"version": map[string]any{"type": "integer", "enum": []any{float64(1)}},
-					"title":   map[string]any{"type": "string"},
+					"purpose": map[string]any{
+						"type": "string", "enum": planPurposes(e.name),
+						"description": "execution (default) tracks current work; submit_plan also accepts deliverable for a future plan artifact.",
+					},
+					"title": map[string]any{"type": "string"},
 					"steps": map[string]any{
 						"type": "array",
 						"items": map[string]any{
@@ -343,6 +349,9 @@ func (t *Tools) updatePlan(input operationInput, submitted bool) (tool.Result, e
 	if err := plan.NormalizeAndValidate(); err != nil {
 		return tool.Result{}, err
 	}
+	if !submitted && plan.Purpose != protocol.PlanPurposeExecution {
+		return tool.Result{}, errors.New("update_plan only accepts execution plans; use submit_plan for deliverables")
+	}
 	next := plan.ContextPlan()
 	if !submitted && t.samePlanProgress(next) {
 		return unchangedPlanResult(), nil
@@ -354,19 +363,30 @@ func (t *Tools) updatePlan(input operationInput, submitted bool) (tool.Result, e
 			return tool.Result{}, err
 		}
 	}
-	if err := t.applyPlan(next); err != nil {
-		return tool.Result{}, err
+	if plan.Purpose == protocol.PlanPurposeExecution {
+		if err := t.applyPlan(next); err != nil {
+			return tool.Result{}, err
+		}
 	}
 	content, err := json.Marshal(plan)
 	metadata := map[string]any{
-		"steps": len(plan.Steps), "plan_delta": true,
+		"steps":         len(plan.Steps),
+		"plan_delta":    plan.Purpose == protocol.PlanPurposeExecution,
+		"plan_artifact": submitted,
 	}
-	if submitted {
+	if submitted && plan.Purpose == protocol.PlanPurposeExecution {
 		metadata["submitted_plan"] = true
 	}
 	return tool.Result{
 		Content: string(content), Metadata: metadata,
 	}, err
+}
+
+func planPurposes(name string) []string {
+	if name == "submit_plan" {
+		return []string{string(protocol.PlanPurposeExecution), string(protocol.PlanPurposeDeliverable)}
+	}
+	return []string{string(protocol.PlanPurposeExecution)}
 }
 
 func (t *Tools) applyPlan(plan Plan) error {
@@ -389,8 +409,7 @@ func (t *Tools) samePlanProgress(plan Plan) bool {
 		current.ProgressSignature() == plan.ProgressSignature()
 }
 
-const requiredActionFinishOrDeclareIncomplete =
-	"finish_open_plan_steps_or_declare_incomplete"
+const requiredActionFinishOrDeclareIncomplete = "finish_open_plan_steps_or_declare_incomplete"
 
 func unchangedPlanResult() tool.Result {
 	return tool.Result{

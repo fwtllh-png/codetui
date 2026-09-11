@@ -5,6 +5,18 @@
   "stream_delay_ms": 40,
   "routes": [
     {
+      "match": ["Name a coding conversation from the user's first request."],
+      "streams": ["session-title.sse"]
+    },
+    {
+      "match": ["visual session title"],
+      "streams": ["tools-read.sse", "tools-complete.sse", "tools-complete.sse"]
+    },
+    {
+      "match": ["visual commentary"],
+      "streams": ["commentary-read.sse", "commentary-search.sse", "tools-complete.sse"]
+    },
+    {
       "match": ["visual plan"],
       "streams": ["plan-layout.sse"]
     },

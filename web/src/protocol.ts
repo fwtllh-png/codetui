@@ -31,7 +31,6 @@ export interface Bootstrap {
   draining: boolean;
   workspace_root?: string;
   workspace?: WorkspaceIdentity;
-  can_open_path?: boolean;
   setup_required?: boolean;
   setup_catalog?: SetupCatalog;
   workspace_catalog?: WorkspaceCatalog;
@@ -148,6 +147,8 @@ export interface SessionSummary {
   session_id: string;
   thread_id: string;
   title: string;
+  title_source?: "default" | "temporary" | "auto" | "manual";
+  title_revision?: number;
   status: string;
   pinned: boolean;
   archived: boolean;
@@ -491,6 +492,7 @@ export interface SessionPlanArtifact {
   turn_id: string;
   cursor: Cursor;
   status: "ready";
+  purpose?: "execution" | "deliverable";
   body: string;
   document?: PlanDocument;
   profile_revision: number;
@@ -511,6 +513,7 @@ export interface PlanStep {
 
 export interface PlanDocument {
   version: 1;
+  purpose?: "execution" | "deliverable";
   revision?: number;
   supersedes_id?: string;
   title?: string;
@@ -721,11 +724,6 @@ export interface WorkspaceSearchResult {
   more: boolean;
 }
 
-export interface WorkspaceOpenResult {
-  opened: true;
-  path: string;
-}
-
 export interface WorkspaceResource {
   path: string;
   uri: string;
@@ -829,6 +827,54 @@ export interface WorkspaceDiff {
   digest: string;
 }
 
+export interface GitChangeStat {
+  added: number;
+  removed: number;
+  binary?: boolean;
+}
+
+export interface GitChange {
+  path: string;
+  index: string;
+  worktree: string;
+  untracked?: boolean;
+  conflict?: boolean;
+  staged?: GitChangeStat;
+  unstaged?: GitChangeStat;
+}
+
+export interface GitOverview extends WorkspaceGitState {
+  revision: string;
+  head: string;
+  root: boolean;
+  files: GitChange[];
+  remotes: string[];
+}
+
+export interface GitPatch {
+  path: string;
+  staged: boolean;
+  diff: string;
+}
+
+export interface GitActionRequest {
+  action: "commit" | "commit_push" | "push" | "create_branch";
+  branch: string;
+  revision: string;
+  message?: string;
+  paths?: string[];
+  include_unstaged?: boolean;
+  remote?: string;
+  new_branch?: string;
+}
+
+export interface GitActionResult {
+  action: string;
+  commit_hash?: string;
+  completed: string[];
+  problem?: Problem;
+}
+
 export interface CredentialStatus {
   reference: {
     kind: string;
@@ -839,15 +885,4 @@ export interface CredentialStatus {
   validation_detail?: string;
   validated_at?: string;
   restart_required?: boolean;
-}
-
-export interface SessionExport {
-  version: number;
-  exported_at: string;
-  session: SessionSummary;
-  snapshot: PresentationSnapshot;
-  integrity: {
-    algorithm: "sha256";
-    digest: string;
-  };
 }

@@ -145,7 +145,7 @@ Scope 本身就是 Correctness 的一部分。
 
 - 显式 Max Steps 限制普通工作，并在预算外保留受限 Finalization；
 - Token/Cost Budget 限制消耗；
-- No-progress 状态逐步收窄能力并请求收敛，而不是直接制造固定执行上限；
+- No-progress 状态提示收敛；只有 Lease 耗尽后的 Finalization 才收窄为 Terminal/Input；
 - Context Limit 触发 Compaction 或 Failure；
 - Pre-sampling Gate 可要求 Plan；
 - Workspace Turn Gate 串行化共享 Root 的 Writer；

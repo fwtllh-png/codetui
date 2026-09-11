@@ -108,14 +108,18 @@ func unaryRouteHandler(path string) (unaryHandler, bool) {
 		return (*Server).workspaceDiagnostics, true
 	case "workspace/diff":
 		return (*Server).workspaceDiff, true
+	case "workspace/git-action":
+		return (*Server).workspaceGitAction, true
+	case "workspace/git-diff":
+		return (*Server).workspaceGitDiff, true
+	case "workspace/git-status":
+		return (*Server).workspaceGitStatus, true
 	case "workspace/git-switch":
 		return (*Server).workspaceGitSwitch, true
 	case "workspace/image":
 		return (*Server).workspaceImage, true
 	case "workspace/list":
 		return (*Server).workspaceList, true
-	case "workspace/open":
-		return (*Server).workspaceOpen, true
 	case "workspace/remove":
 		return (*Server).workspaceRemove, true
 	case "workspace/resource":

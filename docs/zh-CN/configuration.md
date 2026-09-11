@@ -55,7 +55,7 @@ workspace = "."
 tools = true
 max_output_tokens = 0           # 0 = 使用当前模型声明的 MaxOutputTokens
 max_steps = 64                  # 连续无结构化进展的 Step Lease；0 = 不设置
-implement_no_progress_samples = 6  # Work Item 已有 Known/Open 时的无进展 finish-only 租约；0 = 继承 max_steps 派生的 2/3
+implement_no_progress_samples = 6  # 连续重复同一工具调用身份的 finish-only 租约；0 = 继承 max_steps 派生的 2/3
 timeout = "2m"                  # 连接、TLS 和响应头阶段
 lease_timeout = "2m"            # Guard 授权到 Executor 接管前的 Lease 有效期
 approval_timeout = "0s"         # 0 = 审批随 Turn/Session 生命周期，不独立过期
@@ -78,10 +78,10 @@ native_search = false
 
 `turn_budget_tokens` 统计一个 Turn 内所有模型调用的累计输入与输出。它不是模型的
 Context Window：后者只约束单次请求。默认值 `0` 不设置累计上限，单次请求仍受模型
-能力约束；连续无结构化进展时仍受 `max_steps` 约束。Turn 的 Work Item 一旦有
-Known 或 Open，无路径集合签名变化即改用
+能力约束；连续无结构化进展时仍受 `max_steps` 约束。相邻 Sample 重复同一工具
+调用身份（工具名 + 规范化 arguments）时改用
 `implement_no_progress_samples`（默认 6）进入 finish-only；`0` 表示继承
-`max_steps` 派生的 2/3 租约。同一路径再编辑不续租。需要控制成本时应显式设置
+`max_steps` 派生的 2/3 租约。不同 arguments 的同路径编辑或验证不消耗该短租约。需要控制成本时应显式设置
 `turn_budget_tokens`、`budget_tokens` 或 `budget_usd`。
 [execution.verify]
 mode = "soft"                # off | soft | hard
@@ -154,7 +154,7 @@ failure_max_entities = 24
 handle_max_entities = 32
 omission_sample_max_entities = 8
 semantic_narrative_max_input_tokens = 4096
-semantic_narrative_max_output_tokens = 512
+semantic_narrative_max_output_tokens = 0 # 0 = 使用 summary 模型声明的 MaxOutputTokens
 semantic_narrative_max_items = 32
 semantic_narrative_item_max_bytes = 512
 semantic_narrative_timeout = "30s"
@@ -215,14 +215,11 @@ Working Set 已有已读路径时，`session_state` 还给出 Resume Fact：不�
 完成步骤，下一项未完成工作取第一项 outstanding Plan 标题，并列出已读路径
 （上限继承 `context.working_set.max_entries`）。有行号命中时 Resume Fact 还列出
 `Located sites`。`working_set` 只列路径；不要再次 `file_read`，除非即将编辑
-具体窗口。`search_text` / `search_definition` 命中某路径后，对该路径的
-`file_read` 必须带 `start_line`，否则工具返回
-`located_site_window_required`。脏的 `git_status` / `git_diff` 不是重读理由。
-可见 Tail 没有那次读取不是重读理由，应走 `turn_history` / `result_get`；
-截断后先 `result_get`。取消 Checkpoint 保留下一项 Plan 与已读路径指针，失败
-仍不带半开 Tool 链。Paused Continue 恢复短 Work Item 胶囊，不得先用
-`git_status`、`git_diff` 或整文件 `file_read` 巡视工作区；源 Turn 已读路径在
-开局写入 KnownReads，整文件重读会被拒绝。
+具体窗口或先前正文已不在当前 Sample。`search_text` / `search_definition` 命中
+某路径后优先读该窗口。脏的 `git_status` / `git_diff` 不是重读理由。覆盖范围内
+的已知读回放原结果；无法回放时放行必要重读。取消 Checkpoint 保留下一项 Plan
+与已读路径指针，失败仍不带半开 Tool 链。Paused Continue 恢复短 Work Item 胶囊；
+源 Turn 已读路径在开局写入 KnownReads，覆盖读回放，git 巡视放行。
 
 [route]
 lock = false
@@ -315,22 +312,21 @@ Finalization Sample；它只能请求必需输入，或声明 Complete/Incomplet
 
 Agent 还会跟踪连续没有结构化进展的 Sample；对于正在执行 Workspace 工作的 Turn，
 No-progress 阶段由显式 `execution.max_steps` 派生：约三分之一时要求收敛，约三分之二
-时限制继续扩散式探索，但仍允许带 `start_line` 的精确文件读取、工作区修改、有界
-Process 收尾（`exec_command` / `write_stdin`）、必需用户输入、质量检查、Plan 更新和
-Completion；`git_status` / `git_diff` 与整文件 `file_read` 不在 Finish-only
-Allowlist。直到完整 Lease 耗尽才进入结构化 Finalization。Provider 投影与 Tool
-Executor 共享同一 Allowlist，因此当前批次已广告的 Tool 不会再被误判为
-Terminal-only 而拒绝。Complete 声明照常提交；Incomplete 声明记录可恢复的摘要与
+时建议收尾，但不再收窄工具目录。直到完整 Lease 耗尽才进入只保留 Terminal/Input
+的结构化 Finalization。Complete 声明仍可选提交；Incomplete 声明记录可恢复的摘要与
 具体 Pending Actions。Work Item 签名变化（新已读/已改路径、验证覆盖、Plan 完成
-步、接受的 Completion、Open Session）会立即清零计数。同一路径再 `file_edit`、
-被拒绝的 `turn_complete` 与步骤签名未变的 `update_plan` 不续期。Answer 和 Plan
-Turn 还会把首次读取的新路径计为进展，但 Open Implement 或已有 Known/Open 时，
-无签名变化的 Sample 达到 `execution.implement_no_progress_samples`（默认 6，
-公开合同字段）进入 Finish-only；该值为 `0` 时继承 `max_steps` 派生的 2/3 租约。
-已知路径整文件重读与 Continue 上的 git 巡视在执行前拒绝，不续租。Progress 与
-Convergence 状态都会持久化并在 Runtime 恢复后延续。`execution.max_steps=0` 且
-`implement_no_progress_samples=0` 时不启用基于 Sample 数量的 No-progress 上限，
-持续工作仍受模型 Context Window 和显式 Token/Cost Budget 约束。
+步、接受的 Completion、Open Session）会立即清零计数。相邻 Sample 换了不同的
+工具 arguments 也会清零，即使仍在同一批路径上验证或修正。只有工具名与规范化
+arguments 都不变的重复调用才累加 No-progress，达到
+`execution.implement_no_progress_samples`（默认 6，公开合同字段）进入
+Finish-only；该值为 `0` 时继承 `max_steps` 派生的 2/3 租约。
+停轮信号是模型停止调用工具并写出用户可见正文；`turn_complete(status=complete)`
+可选，未完成的 execution Plan 步骤不拒绝停轮。
+已知路径的覆盖重读回放原结果，无法回放时放行；Continue 上的 git 巡视放行。
+Progress 与 Convergence 状态都会持久化并在 Runtime 恢复后延续。
+`execution.max_steps=0` 且 `implement_no_progress_samples=0` 时不启用基于 Sample
+数量的 No-progress 上限，持续工作仍受模型 Context Window 和显式 Token/Cost Budget
+约束。
 
 `execution.subagent.max_steps` 同样使用 `0 = 未设置` 语义。可选的
 `execution.subagent.wall_time` 是可续期执行 Lease：可观测的子 Runtime 进展会续期；
@@ -372,6 +368,10 @@ Token。它与模型 Context Window、`budget_tokens` / `turn_budget_tokens` 经
 结构化 Continuation Checkpoint，不阻塞下一轮 Sample。Checkpoint 保留文件与
 代码接口、当前工作和下一步，并要求每项引用输入消息。`off` 只保留 Truth Capsule
 与原始 Tail。`inline` 不再合法。
+`semantic_narrative_max_output_tokens = 0` 与主采样的 `max_output_tokens = 0` 相同：
+初始 Ceiling 来自 summary 模型声明的 `MaxOutputTokens`，再被本次输入后的剩余窗口
+收窄。正值是 Operator 显式上限。失败时保留 Ledger Session State；对话投影不把
+`post_turn` Narrative fallback 显示成 Compaction 卡片。
 语义压缩与主采样共用同一套失败分类：兼容提供商上的 HTTP 429（含
 `insufficient_quota` 这类瞬时配额文案）走 Rate Limit Recovery Budget；5xx /
 Timeout 走 `semantic_narrative_retry_limit`（默认 1）和
@@ -468,6 +468,11 @@ Memory 使用带稳定 ID 和 Generation 的记录存储。`user`、`workspace` 
 首次 Setup 的一级 Provider 包括 OpenAI、Anthropic、DeepSeek、GLM 和自定义
 OpenAI-Compatible。GLM 内置 `glm-5.3`、`glm-5.3-flash`，固定使用
 `https://open.bigmodel.cn/api/coding/paas/v4` 与 `openai_chat`。
+
+GLM Chat 请求默认同时发送 `stream=true` 与 `tool_stream=true`，遵循
+[智谱工具流式输出协议](https://docs.bigmodel.cn/cn/guide/capabilities/stream-tool)。
+工具参数逐段接收并续期 `execution.idle_timeout`，完整采样成功后才交给 Guard 执行；
+其他 Provider 和 Responses 协议不发送 `tool_stream`，也不按模型名称猜测是否支持。
 
 不要猜测标识符。Web Settings 展示 Runtime 发布的 Provider/Model Catalog；即使
 Model ID 相同，Provider ID 也可能不同，存在歧义时必须在 TOML 中显式指定 Provider。

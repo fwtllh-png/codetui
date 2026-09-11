@@ -260,14 +260,11 @@ func (e *Engine) modelStep(
 		}
 		finishOnly = finishOnly || convergenceOnly || budgetFinishOnly ||
 			economicFinishOnly
-		if finishOnly {
+		if convergenceOnly {
 			requestTools = slices.DeleteFunc(
 				append([]provider.ToolDefinition(nil), requestTools...),
 				func(definition provider.ToolDefinition) bool {
-					if convergenceOnly {
-						return !tool.ConvergenceDefinitionAllowed(definition)
-					}
-					return !tool.FinishOnlyDefinitionAllowed(catalog, definition)
+					return !tool.ConvergenceDefinitionAllowed(definition)
 				})
 			reasoningEffort = finishOnlyReasoningEffort(
 				route.Model().Capabilities,
@@ -366,6 +363,14 @@ func (e *Engine) modelStep(
 		sampleLease, holdErr := e.holdProviderSample(ctx)
 		if holdErr != nil {
 			return nil, nil, totalUsage, lastEstimate, holdErr
+		}
+		// Metadata sampling may have settled usage while this attempt queued.
+		maxOutputTokens, err = e.checkBudget(
+			windowProjection.FullActiveTokens, turnUsage, totalUsage, maxOutputTokens,
+		)
+		if err != nil {
+			sampleLease.Release()
+			return nil, nil, totalUsage, lastEstimate, err
 		}
 		providerAttempt++
 		attemptStarted := time.Now()

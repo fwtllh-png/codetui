@@ -166,6 +166,7 @@ type SessionPlanArtifact struct {
 	TurnID                 TurnID             `json:"turn_id"`
 	Cursor                 Cursor             `json:"cursor"`
 	Status                 PlanArtifactStatus `json:"status"`
+	Purpose                PlanPurpose        `json:"purpose,omitempty"`
 	Body                   string             `json:"body"`
 	ProfileRevision        uint64             `json:"profile_revision"`
 	ExecutionProfileDigest string             `json:"execution_profile_digest,omitempty"`
@@ -189,7 +190,10 @@ func (p SessionPlanArtifact) Validate() error {
 		strings.ContainsRune(p.Body, '\x00') {
 		return errors.New("Session Plan Artifact body or status is invalid")
 	}
-	if !p.CanImplement && !p.CanAutopilot {
+	if err := validatePlanPurpose(p.Purpose, p.Body, p.CanImplement, p.CanAutopilot); err != nil {
+		return err
+	}
+	if p.Purpose.Normalize() == PlanPurposeExecution && !p.CanImplement && !p.CanAutopilot {
 		return errors.New("Session Plan Artifact has no transition")
 	}
 	return nil

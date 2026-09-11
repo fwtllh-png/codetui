@@ -145,8 +145,6 @@ func completionRejectionAction(reason string) string {
 		return "perform_workspace_mutation"
 	case "verification_evidence_required":
 		return "exec_command"
-	case "plan_progress_incomplete":
-		return RequiredActionFinishOrDeclareIncomplete
 	case "pending_actions":
 		return "continue_work"
 	case "convergence_blocked":

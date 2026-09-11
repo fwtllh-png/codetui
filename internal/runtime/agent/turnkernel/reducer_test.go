@@ -99,42 +99,24 @@ func TestZeroDeclarationRepairBudgetConvergesWithoutAnotherRepair(t *testing.T) 
 	}
 }
 
-func TestCompletionRequirementUsesMutationIntentAndOperationFacts(t *testing.T) {
+func TestRequiresCompletionFollowsStructuredTerminalPolicy(t *testing.T) {
 	answer := startSampling(t, protocol.TurnIntentAnswer)
 	answer.ClosedCalls["read"] = ToolResultState{ID: "read", Name: "file_read"}
-	if !RequiresCompletion(answer) {
-		t.Fatal("tool-backed answer does not require completion")
+	answer.MutationRevision = 1
+	if RequiresCompletion(answer) {
+		t.Fatal("tool-backed mutation required structured completion")
 	}
 	answer.Policy.StructuredTerminalRequired = true
 	if !RequiresCompletion(answer) {
-		t.Fatal("structured interactive answer does not require completion")
+		t.Fatal("structured terminal did not require completion")
 	}
-	answer.Policy.StructuredTerminalRequired = false
-	answer.ClosedCalls["read"] = ToolResultState{ID: "read", Name: "file_read"}
-	answer.MutationRevision = 1
-	if !RequiresCompletion(answer) {
-		t.Fatal("observed mutation does not require completion")
-	}
-	operation := startSampling(t, protocol.TurnIntentOperation)
-	operation.ClosedCalls["deploy"] = ToolResultState{
-		ID: "deploy", Name: "deploy",
-	}
-	if !RequiresCompletion(operation) {
-		t.Fatal("successful operation does not require completion")
-	}
-	operation.ClosedCalls["deploy"] = ToolResultState{
-		ID: "deploy", Name: "deploy", IsError: true,
-	}
-	if RequiresCompletion(operation) {
-		t.Fatal("failed operation was treated as completed")
+	answer.Policy.CompletionRequired = false
+	if RequiresCompletion(answer) {
+		t.Fatal("disabled completion policy still requires completion")
 	}
 	workspaceChange := startSampling(t, protocol.TurnIntentWorkspaceChange)
-	if !RequiresCompletion(workspaceChange) {
-		t.Fatal("workspace change intent does not require completion")
-	}
-	workspaceChange.Policy.CompletionRequired = false
 	if RequiresCompletion(workspaceChange) {
-		t.Fatal("disabled completion policy still requires completion")
+		t.Fatal("workspace change required structured completion by default")
 	}
 }
 
@@ -446,15 +428,15 @@ func TestReducerOwnsCompletionAcceptanceAndRuntimeBindings(t *testing.T) {
 			action:    "final_answer",
 		},
 		{
-			name:  "complete plan requires synchronized progress",
+			name:  "open plan steps do not block a complete declaration",
 			state: mutated,
 			candidate: func() CompletionCandidate {
 				value := base
 				value.PlanOpenSteps = 1
 				return value
 			}(),
-			reason: "plan_progress_incomplete",
-			action: RequiredActionFinishOrDeclareIncomplete,
+			accepted: true,
+			action:   "await_runtime_verification",
 		},
 		{
 			name:  "answer planning may complete with open plan steps",
@@ -575,7 +557,7 @@ func TestMutationInvalidatesCompletionAndVerification(t *testing.T) {
 	}
 }
 
-func TestToolAssistedReadOnlyTurnRequiresDeclaration(t *testing.T) {
+func TestToolAssistedReadOnlyTurnCompletesFromCapturedText(t *testing.T) {
 	state := startSampling(t, protocol.TurnIntentAnswer)
 	state = apply(t, state, ToolCallsProposed{
 		Calls: []ToolCallState{{ID: "read-1", Name: "file_read"}},
@@ -584,9 +566,9 @@ func TestToolAssistedReadOnlyTurnRequiresDeclaration(t *testing.T) {
 	state.ProvisionalOutput = []string{"The review is complete."}
 
 	transition := apply(t, state, EvaluateTurnStep{ProgressKey: "read-only"})
-	if transition.State.NextAction != StepActionRepairDeclaration {
+	if transition.State.NextAction != StepActionComplete {
 		t.Fatalf("next action = %q, want %q",
-			transition.State.NextAction, StepActionRepairDeclaration)
+			transition.State.NextAction, StepActionComplete)
 	}
 }
 
@@ -1396,9 +1378,9 @@ func TestRejectedCompletionDoesNotRenewProgressOrRepairKeys(t *testing.T) {
 			DeclarationValid: true,
 			Status:           "complete",
 			Summary:          "done",
+			PendingActions:   []string{"still open"},
 			CompletionCall:   "complete-1",
 			BatchSize:        1,
-			PlanOpenSteps:    2,
 		},
 	}).State
 	second := apply(t, state, CompletionEvaluated{
@@ -1406,9 +1388,9 @@ func TestRejectedCompletionDoesNotRenewProgressOrRepairKeys(t *testing.T) {
 			DeclarationValid: true,
 			Status:           "complete",
 			Summary:          "done again",
+			PendingActions:   []string{"still open"},
 			CompletionCall:   "complete-2",
 			BatchSize:        1,
-			PlanOpenSteps:    2,
 		},
 	}).State
 	if first.Completion == nil || first.Completion.Accepted ||
@@ -1433,15 +1415,16 @@ func TestRejectedCompletionDoesNotRenewProgressOrRepairKeys(t *testing.T) {
 	state.ProvisionalOutput = []string{"working"}
 	state.LastModelContinued = false
 	state.UnresolvedToolFailure = false
+	state.Policy.StructuredTerminalRequired = true
 	state.Policy.DeclarationRepairLimit = 1
 	state = apply(t, state, CompletionEvaluated{
 		Candidate: CompletionCandidate{
 			DeclarationValid: true,
 			Status:           "complete",
 			Summary:          "done",
+			PendingActions:   []string{"still open"},
 			CompletionCall:   "complete-3",
 			BatchSize:        1,
-			PlanOpenSteps:    2,
 		},
 	}).State
 	key := FormatRepairProgressKey(state)

@@ -11,6 +11,7 @@ import {
   type KeyboardEvent
 } from "react";
 import "./ComposerCommandMenu.css";
+import {Presence} from "./primitives/Presence";
 
 export interface ComposerCommand {
   id: string;
@@ -93,6 +94,8 @@ export function ComposerCommandMenu({
     setRecentIDs(nextRecent);
     writeRecentCommandIDs(nextRecent);
     onOpenChange(false);
+    if (onRequestComposerFocus) onRequestComposerFocus();
+    else triggerRef.current?.focus();
     onSelect?.(command);
     void command.run();
   };
@@ -170,8 +173,8 @@ export function ComposerCommandMenu({
       >
         <Plus size={15} />
       </button>
-      {open && (
-        <div className="commandMenu" onKeyDown={onKeyDown}>
+      <Presence open={open}>
+        <div className="commandMenu" data-motion-surface onKeyDown={onKeyDown}>
           <label className="commandMenuSearch">
             <span className="srOnly">Search commands</span>
             <input
@@ -214,7 +217,7 @@ export function ComposerCommandMenu({
             )}
           </div>
         </div>
-      )}
+      </Presence>
     </span>
   );
 }

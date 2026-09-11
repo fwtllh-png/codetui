@@ -15,6 +15,8 @@ func DecodeTerminalOutboxEntry(
 	switch protocol.EventKind(entry.Kind) {
 	case protocol.EventOutputDelta:
 		data = &protocol.OutputDeltaData{}
+	case protocol.EventCommentaryCompleted:
+		data = &protocol.CommentaryCompletedData{}
 	case protocol.EventExecutionReceipt:
 		data = &protocol.ExecutionReceiptData{}
 	case protocol.EventTurnCompleted:
@@ -45,6 +47,10 @@ func EventKind(data protocol.EventData) protocol.EventKind {
 		return protocol.EventTurnStarted
 	case *protocol.OutputDeltaData:
 		return protocol.EventOutputDelta
+	case *protocol.CommentaryCompletedData:
+		return protocol.EventCommentaryCompleted
+	case *protocol.SessionTitleUpdatedData:
+		return protocol.EventSessionTitleUpdated
 	case *protocol.ReasoningDeltaData:
 		return protocol.EventReasoningDelta
 	case *protocol.ReasoningCompletedData:

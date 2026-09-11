@@ -4,6 +4,7 @@ import type {
   TraceSpan,
   TraceSpanKind
 } from "../protocol";
+import {commentaryNodeID} from "./conversation";
 
 export type TrajectoryKind =
   | "system"
@@ -92,6 +93,15 @@ export function projectTrajectory(
           put
         );
         break;
+      case "commentary.completed": {
+        const id = commentaryNodeID(event);
+        if (!recordIndex.has(id)) {
+          put(record(event, "assistant", "UPDATE", summary(data.text), {
+            id, output: data.text
+          }));
+        }
+        break;
+      }
       case "reasoning.delta":
         appendReasoningRecord(
           event, reasoningByTurn, records, recordIndex, put, false
@@ -506,6 +516,13 @@ function eventSpans(
     if (event.kind === "output.delta") {
       const id = `output-${event.turn_id}`;
       if (!startedByRecord.has(id)) startedByRecord.set(id, event);
+    }
+    if (event.kind === "commentary.completed") {
+      const id = commentaryNodeID(event);
+      if (!startedByRecord.has(id)) {
+        startedByRecord.set(id, event);
+        endedByRecord.set(id, event);
+      }
     }
     if (event.kind === "reasoning.delta" ||
         event.kind === "reasoning.completed") {

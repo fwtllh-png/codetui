@@ -252,6 +252,9 @@ func (a *EngineAdapter) StartTurn(
 		editorContext,
 	)
 	emit := func(event agentengine.Event) error {
+		if event.Commentary != nil {
+			return sink.Emit(event.Commentary)
+		}
 		receipt.Observe(event)
 		if event.CatalogChanged != nil {
 			convert := func(changes []tool.CatalogChange) []protocol.ToolCatalogChange {
@@ -489,13 +492,15 @@ func (a *EngineAdapter) StartTurn(
 				}); err != nil {
 					return err
 				}
-				if planDelta, _ := event.Result.Metadata["plan_delta"].(bool); planDelta && !event.Result.IsError {
-					_, err := interact.ParseSubmittedPlan([]byte(event.Result.Content))
+				planDelta, _ := event.Result.Metadata["plan_delta"].(bool)
+				planArtifact, _ := event.Result.Metadata["plan_artifact"].(bool)
+				if (planDelta || planArtifact) && !event.Result.IsError {
+					plan, err := interact.ParseSubmittedPlan([]byte(event.Result.Content))
 					if err != nil {
 						return err
 					}
 					if err := sink.Emit(&protocol.PlanDeltaData{
-						Body: event.Result.Content, Done: true,
+						Body: event.Result.Content, Purpose: plan.Purpose, Done: true,
 					}); err != nil {
 						return err
 					}

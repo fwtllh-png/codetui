@@ -147,6 +147,7 @@ func (EvaluateTurnStep) commandName() string { return "evaluate_turn_step" }
 
 type ObserveProgress struct {
 	Signature        string
+	SampleIdentity   string
 	CompletedSamples uint32
 }
 

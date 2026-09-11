@@ -10,6 +10,8 @@
   "checkpoint.restored": {"class":"artifact","item_owner":"checkpoint","durability":"retained","correlation":"checkpoint","terminal":false},
   "citation": {"class":"evidence","item_owner":"turn","durability":"retained","correlation":"turn","terminal":false},
   "command.execution": {"class":"audit","item_owner":"tool","durability":"retained","correlation":"call","terminal":false},
+  "commentary.completed": {"class":"stream","item_owner":"turn","durability":"retained","correlation":"sample","terminal":false},
+  "session.title.updated": {"class":"audit","item_owner":"turn","durability":"retained","correlation":"none","terminal":false},
   "diagnostics.result": {"class":"evidence","item_owner":"turn","durability":"retained","correlation":"turn","terminal":false},
   "extension.control": {"class":"audit","item_owner":"operation","durability":"retained","correlation":"operation","terminal":false},
   "host.command": {"class":"interaction","item_owner":"turn","durability":"retained","correlation":"command","terminal":false},

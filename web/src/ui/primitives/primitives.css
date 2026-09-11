@@ -1,0 +1,167 @@
+:where(button, [role="button"], select, input, textarea) {
+  transition:
+    background-color var(--ch-motion-feedback) var(--ch-ease-in-out),
+    border-color var(--ch-motion-feedback) var(--ch-ease-in-out),
+    color var(--ch-motion-feedback) var(--ch-ease-in-out),
+    box-shadow var(--ch-motion-feedback) var(--ch-ease-in-out);
+}
+
+:where(button, [role="button"]):active:not(:disabled) {
+  box-shadow: inset 0 0 0 100px var(--ch-state-pressed);
+}
+
+:where(input[type="checkbox"], input[type="radio"]) {
+  accent-color: var(--ch-business);
+}
+
+.uiPresence {
+  display: contents;
+  --ch-presence-duration: var(--ch-motion-enter);
+  --ch-presence-ease: var(--ch-ease-enter);
+}
+
+.uiPresence[data-motion-kind="dialog"],
+.uiPresence[data-motion-kind="drawer"] {
+  --ch-presence-duration: var(--ch-motion-panel);
+}
+
+.uiPresence[data-exiting] {
+  --ch-presence-duration: var(--ch-motion-exit);
+  --ch-presence-ease: var(--ch-ease-exit);
+}
+
+.uiPresence > [data-motion-surface],
+.uiPresence > [data-motion-backdrop],
+.uiPresence > [data-motion-backdrop] > [data-motion-surface] {
+  animation: none;
+  opacity: 1;
+  translate: none;
+  scale: none;
+  transition:
+    opacity var(--ch-presence-duration) var(--ch-presence-ease),
+    translate var(--ch-presence-duration) var(--ch-presence-ease),
+    scale var(--ch-presence-duration) var(--ch-presence-ease);
+}
+
+.uiPresence[data-presence="closed"] > [data-motion-surface],
+.uiPresence[data-presence="closed"] > [data-motion-backdrop] {
+  opacity: 0;
+}
+
+.uiPresence[data-presence="closed"] > [data-motion-surface],
+.uiPresence[data-presence="closed"] > [data-motion-backdrop] > [data-motion-surface] {
+  translate: 0 5px;
+}
+
+.uiPresence[data-motion-kind="dialog"][data-presence="closed"] > [data-motion-backdrop] > [data-motion-surface] {
+  scale: .98;
+}
+
+.uiPresence[data-motion-kind="drawer"][data-presence="closed"] > [data-motion-surface] {
+  translate: 16px 0;
+}
+
+.uiPresence[data-motion-kind="fade"][data-presence="closed"] > [data-motion-surface],
+.uiPresence[data-motion-kind="fade"][data-presence="closed"] > [data-motion-backdrop] {
+  translate: 0 0;
+}
+
+.uiCollapse {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  transition:
+    grid-template-rows var(--ch-motion-disclosure) var(--ch-ease-in-out),
+    opacity var(--ch-motion-enter) var(--ch-ease-in-out);
+}
+
+.uiCollapse[data-open] {
+  grid-template-rows: 1fr;
+  opacity: 1;
+}
+
+.uiCollapse > div {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.uiStatus {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+  padding: 3px 8px;
+  border-radius: var(--ch-radius);
+  background: var(--ch-panel-subtle);
+  color: var(--ch-text-secondary);
+  font-size: 12px;
+  line-height: 20px;
+}
+
+.uiStatus svg {
+  flex: 0 0 auto;
+}
+
+.uiStatus[data-tone="success"] {
+  color: var(--ch-success);
+  background: var(--ch-success-soft);
+}
+
+.uiStatus[data-tone="warning"] {
+  color: var(--ch-warning);
+  background: var(--ch-warning-soft);
+}
+
+.uiStatus[data-tone="danger"] {
+  color: var(--ch-danger);
+  background: var(--ch-danger-soft);
+}
+
+.uiSkeleton {
+  display: grid;
+  gap: 14px;
+  padding: 24px;
+  min-height: 180px;
+  align-content: start;
+}
+
+.uiSkeleton > span {
+  display: block;
+  width: 100%;
+  height: 12px;
+  border-radius: var(--ch-radius);
+  background: var(--ch-panel-subtle);
+  animation: ui-skeleton-pulse var(--ch-motion-skeleton) var(--ch-ease-in-out) infinite;
+}
+
+.uiSkeleton > span:first-child { width: 44%; height: 20px; }
+.uiSkeleton > span:last-child { width: 72%; }
+
+@keyframes ui-enter {
+  from { opacity: 0; transform: translateY(5px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes ui-skeleton-pulse {
+  50% { opacity: .45; }
+}
+
+.uiStatus,
+.disclosureRow,
+.sessionStatusMark {
+  transition:
+    color var(--ch-motion-feedback) var(--ch-ease-in-out),
+    background-color var(--ch-motion-feedback) var(--ch-ease-in-out);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .uiSkeleton > span { animation: none; }
+}
+
+.app[data-motion="none"] *,
+.app[data-motion="none"] *::before,
+.app[data-motion="none"] *::after {
+  animation: none !important;
+  transition: none !important;
+  scroll-behavior: auto !important;
+}

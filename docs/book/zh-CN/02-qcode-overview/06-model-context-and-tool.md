@@ -150,10 +150,10 @@ Result 可以包含 Content、Metadata、File Change、Error Category 和大输�
 可以触发下一次 Sample，让 Model 基于证据继续或修正 Argument；已接受的
 `turn_complete` Result 则直接发布其 `summary`，不再发起下一次 Sample。
 
-未执行工具且没有 Mutation、Pending Tool 或 Workspace Change 的只读 Answer/Plan，
-可以在 Provider 返回非空正文并以 `end_turn` 停止时直接完成。执行过工具的 Turn 以及
-任何写入、副作用或验证路径仍要求 `turn_complete` 和对应 Runtime Gate，不能用普通
-正文绕过。普通 Sample 和跨 Turn 请求逐字保留已发送的 Tool Result；只有显式
+模型停止调用工具并写出非空用户可见正文即可结束 Turn。`turn_complete` 可选：
+`status=complete` 用 `summary` 精确替换已捕获答案，`status=incomplete` 记录可恢复
+的 Pending Actions。Mutation 仍走 Journal 与 Verify Gate；默认 Verify 失败只报告
+风险，不撤销停轮。普通 Sample 和跨 Turn 请求逐字保留已发送的 Tool Result；只有显式
 compaction/rebase 才能把大 Tool Result 降级为有界 Surface 与 Handle，完整内容仍由
 Result Store 保存并可按需重取。
 

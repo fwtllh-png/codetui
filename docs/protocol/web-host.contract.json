@@ -565,6 +565,36 @@
       "requires_capability": true
     },
     {
+      "path": "/api/v1/workspace/git-action",
+      "method": "POST",
+      "request": "workspace_git_action",
+      "response": "workspace_git_result",
+      "mutation": true,
+      "idempotency_key": true,
+      "requires_runtime": true,
+      "requires_capability": true
+    },
+    {
+      "path": "/api/v1/workspace/git-diff",
+      "method": "POST",
+      "request": "workspace_git_diff",
+      "response": "workspace_git_patch",
+      "mutation": false,
+      "idempotency_key": false,
+      "requires_runtime": true,
+      "requires_capability": true
+    },
+    {
+      "path": "/api/v1/workspace/git-status",
+      "method": "POST",
+      "request": "empty",
+      "response": "workspace_git_overview",
+      "mutation": false,
+      "idempotency_key": false,
+      "requires_runtime": true,
+      "requires_capability": true
+    },
+    {
       "path": "/api/v1/workspace/git-switch",
       "method": "POST",
       "request": "workspace_git_switch",
@@ -592,16 +622,6 @@
       "mutation": false,
       "idempotency_key": false,
       "requires_runtime": false,
-      "requires_capability": true
-    },
-    {
-      "path": "/api/v1/workspace/open",
-      "method": "POST",
-      "request": "workspace_open",
-      "response": "workspace_open_result",
-      "mutation": false,
-      "idempotency_key": false,
-      "requires_runtime": true,
       "requires_capability": true
     },
     {

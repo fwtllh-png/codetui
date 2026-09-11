@@ -13,11 +13,18 @@ import (
 	"github.com/fwtllh-png/QCode/internal/platform/process"
 )
 
+func applyVerificationDefaults(input *execCommandInput) {
+	if input == nil {
+		return
+	}
+	if input.Verification == "" && len(input.CoveredPaths) != 0 {
+		input.Verification = "check"
+	}
+}
+
 func validateVerification(input execCommandInput) error {
+	applyVerificationDefaults(&input)
 	if input.Verification == "" {
-		if len(input.CoveredPaths) != 0 {
-			return errors.New("covered_paths requires a verification purpose")
-		}
 		return nil
 	}
 	switch input.Verification {
@@ -40,6 +47,7 @@ func validateVerification(input execCommandInput) error {
 }
 
 func (p *commandProtocol) prepareVerification(input execCommandInput) (*verify.Evidence, error) {
+	applyVerificationDefaults(&input)
 	if err := validateVerification(input); err != nil {
 		return nil, err
 	}

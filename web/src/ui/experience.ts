@@ -8,15 +8,8 @@ export const experience = Object.freeze({
     chatContent: 748,
     composer: 780,
     disclosureRow: 24,
-    trajectoryRow: 30
-  },
-  motion: {
-    panel: 300,
-    crossfade: 150,
-    disclosure: 100,
-    shimmer: 1_800,
-    toolSweep: 2_600,
-    pending: 1_000
+    trajectoryRow: 30,
+    compactBreakpoint: 720
   },
   scrolling: {
     followThreshold: 24

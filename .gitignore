@@ -11,6 +11,8 @@
 /docs/GITHUB-GROWTH-PLAN.zh-CN.md
 # Local VS Code Native Agent Chat design proposal.
 /docs/VSCODE-NATIVE-AGENT-CHAT-DESIGN.zh-CN.md
+# Local strategy development agent product concept.
+/docs/zh-CN/strategy-autogen-agent-product-concept.md
 *.cover
 coverage.out
 /.dbg/

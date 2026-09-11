@@ -43,6 +43,25 @@ func TestDefaultsUseExtendedTurnBudget(t *testing.T) {
 		defaults.Context.View.CheckpointMaxBytes != 0 {
 		t.Fatalf("default view = %+v", defaults.Context.View)
 	}
+	if defaults.Context.Compact.SemanticNarrativeMaxOutputTokens != 0 {
+		t.Fatalf(
+			"default semantic narrative max output tokens = %d, want automatic",
+			defaults.Context.Compact.SemanticNarrativeMaxOutputTokens,
+		)
+	}
+}
+
+func TestLoadRejectsNarrativeOutputCeilingAboveSafetyLimit(t *testing.T) {
+	tooLarge := (1 << 20) + 1
+	_, err := Load(LoadOptions{Overrides: Overrides{
+		CompactSemanticNarrativeMaxOutputTokens: &tooLarge,
+	}})
+	if err == nil || !strings.Contains(
+		err.Error(),
+		fieldCompactSemanticNarrativeMaxOutputTokens,
+	) {
+		t.Fatalf("output ceiling error = %v", err)
+	}
 }
 
 func TestLoadPrecedence(t *testing.T) {

@@ -97,6 +97,8 @@ func TestNarrativeGenerationUsesSummaryRouteWithoutTools(t *testing.T) {
 		result.Usage.InputTokens != 40 ||
 		len(runtime.requests) != 1 ||
 		runtime.requests[0].Purpose != "summary" ||
+		runtime.requests[0].MaxOutputTokens !=
+			engine.options.Route.Model().Limits.MaxOutputTokens ||
 		len(runtime.requests[0].Tools) != 0 ||
 		runtime.requests[0].NativeSearch ||
 		!strings.Contains(
@@ -106,8 +108,33 @@ func TestNarrativeGenerationUsesSummaryRouteWithoutTools(t *testing.T) {
 		!strings.Contains(
 			runtime.requests[0].Messages[0].Text(),
 			"next_steps",
+		) ||
+		!strings.Contains(
+			runtime.requests[0].Messages[0].Text(),
+			"purpose=deliverable",
 		) {
 		t.Fatalf("result=%+v request=%+v", result, runtime.requests)
+	}
+}
+
+func TestNarrativeGenerationHonorsOperatorOutputCeiling(t *testing.T) {
+	runtime := &scriptedProvider{streams: []provider.Stream{
+		&providerfixture.SliceStream{Events: []provider.StreamEvent{
+			{Type: provider.EventTextDelta},
+			{Type: provider.EventMessageStop, StopReason: provider.StopReasonEndTurn},
+		}},
+	}}
+	engine := newEngine(t, runtime, tool.NewRegistry(nil, nil))
+	engine.options.Context.SemanticNarrative = "post_turn"
+	engine.options.Context.NarrativeLimits.MaxOutputBytes = 512 * 4
+	truth, input := mustNarrativeRequest(t, engine)
+	runtime.streams[0].(*providerfixture.SliceStream).Events[0].Text =
+		narrativePreferenceJSON(input.Excerpts[0].MessageID)
+	result, err := engine.GenerateNarrative(t.Context(), truth, input, 2, "")
+	if err != nil || result.Fallback ||
+		len(runtime.requests) != 1 ||
+		runtime.requests[0].MaxOutputTokens != 512 {
+		t.Fatalf("result=%+v request=%+v err=%v", result, runtime.requests, err)
 	}
 }
 

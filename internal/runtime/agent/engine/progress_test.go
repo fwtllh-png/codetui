@@ -266,7 +266,7 @@ func TestWorkspaceTurnFinalizesAfterNoProgressBudget(t *testing.T) {
 		streams = append(streams, toolCallStream(
 			fmt.Sprintf("call-%d", index),
 			"echo",
-			fmt.Sprintf(`{"text":"read-%d"}`, index),
+			`{"text":"read"}`,
 		))
 	}
 	streams = append(streams, toolCallStream(
@@ -341,7 +341,7 @@ func TestReadOnlyTurnEntersFinishOnlyAtDerivedBudget(t *testing.T) {
 		streams = append(streams, toolCallStream(
 			fmt.Sprintf("call-%d", index),
 			"echo",
-			fmt.Sprintf(`{"text":"read-%d"}`, index),
+			`{"text":"read"}`,
 		))
 	}
 	streams = append(streams, textStream("bounded final answer"))
@@ -367,8 +367,8 @@ func TestReadOnlyTurnEntersFinishOnlyAtDerivedBudget(t *testing.T) {
 	if result.Text != "bounded final answer" || len(runtime.requests) != 46 {
 		t.Fatalf("result=%+v requests=%d", result, len(runtime.requests))
 	}
-	if len(runtime.requests[45].Tools) != 0 {
-		t.Fatalf("finish-only request exposed tools: %+v", runtime.requests[45].Tools)
+	if len(runtime.requests[45].Tools) == 0 {
+		t.Fatalf("finish-only request stripped the catalog: %+v", runtime.requests[45].Tools)
 	}
 }
 
@@ -378,7 +378,7 @@ func TestReadOnlyFinishOnlyCompletesCurrentProcess(t *testing.T) {
 		streams = append(streams, toolCallStream(
 			fmt.Sprintf("read-%d", index),
 			"echo",
-			fmt.Sprintf(`{"text":"read-%d"}`, index),
+			`{"text":"read"}`,
 		))
 	}
 	streams = append(
@@ -414,7 +414,7 @@ func TestReadOnlyFinishOnlyCompletesCurrentProcess(t *testing.T) {
 	for _, definition := range runtime.requests[45].Tools {
 		names[definition.Name] = true
 	}
-	if !names["exec_command"] || names["echo"] {
+	if !names["exec_command"] || !names["echo"] {
 		t.Fatalf("finish-only tools = %+v", names)
 	}
 }
@@ -466,5 +466,64 @@ func TestAcceptedCompletionPublishesSummaryWithoutFinalAnswerSampleAtLimit(
 	}
 	if result.Text != "analysis complete" || len(runtime.requests) != 16 {
 		t.Fatalf("result=%+v requests=%d", result, len(runtime.requests))
+	}
+}
+
+func TestIdenticalToolRepeatsUseImplementLease(t *testing.T) {
+	streams := make([]provider.Stream, 0, 16)
+	for index := range 14 {
+		streams = append(streams, toolCallStream(
+			fmt.Sprintf("echo-%d", index),
+			"echo",
+			`{"text":"read"}`,
+		))
+	}
+	streams = append(streams, toolCallStream(
+		"incomplete-1",
+		completiontool.Name,
+		`{"status":"incomplete","summary":"Still repeating the same read.","pending_actions":["Stop repeating echo."]}`,
+	))
+	runtime := &scriptedProvider{streams: streams}
+	registry := tool.NewRegistry(nil, nil)
+	for _, executor := range []tool.Executor{
+		&echoTool{}, &completiontool.Tool{},
+	} {
+		if err := registry.Register(executor); err != nil {
+			t.Fatal(err)
+		}
+	}
+	engine := newEngine(t, runtime, registry)
+	engine.options.MaxSteps = 64
+	engine.options.ImplementNoProgressSamples = 6
+	route := mustTestRouteWithContext(t, 65_536)
+	engine.options.Route = route
+	routes, err := model.NewRouteSet(route, nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine.options.Routes = routes
+
+	var terminal Event
+	_, err = engine.RunForTurnWithIntentAndAttachments(
+		t.Context(),
+		"identical-echo-lease",
+		"analyze the repository",
+		protocol.TurnIntentAnswer,
+		nil,
+		func(event Event) error {
+			if event.State == Failed {
+				terminal = event
+			}
+			return nil
+		},
+	)
+	if err == nil ||
+		protocol.CodeOf(err) != protocol.CodeConflict ||
+		terminal.Convergence == nil ||
+		terminal.Convergence.Cause != string(turnkernel.ConvergenceNoProgress) {
+		t.Fatalf("Run() error = %v terminal=%+v", err, terminal.Convergence)
+	}
+	if len(runtime.requests) >= 22 {
+		t.Fatalf("identical repeats used max_steps lease: requests=%d", len(runtime.requests))
 	}
 }

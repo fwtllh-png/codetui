@@ -78,7 +78,7 @@ func RunContext(
 		_, _ = fmt.Fprintln(flags.Output(), "Run the local QCode Web workspace.")
 		flags.PrintDefaults()
 	}
-	flags.StringVar(&options.workspace, "workspace", "", "workspace root (default from config)")
+	flags.StringVar(&options.workspace, "workspace", "", "explicit workspace root to add and open")
 	flags.StringVar(&options.configPath, "config", "", "TOML configuration file")
 	flags.StringVar(&options.dataDir, "data-dir", "", "persistent state directory")
 	flags.StringVar(&options.host, "host", "127.0.0.1", "loopback listen host")
@@ -174,17 +174,20 @@ func runWeb(
 	var workspaceRoot, dataDir string
 	var workspaceIdentity protocol.WorkspaceIdentity
 	if configErr == nil {
-		workspaceRoot, workspaceIdentity, configErr = normalizeWorkspaceRoot(
-			loaded.Config.Execution.Workspace,
-		)
+		if loaded.Provenance["execution.workspace"] != config.SourceDefault {
+			workspaceRoot, workspaceIdentity, configErr = normalizeWorkspaceRoot(
+				loaded.Config.Execution.Workspace,
+			)
+		}
 		dataDir = loaded.Config.State.DataDir
 		options.workspace = workspaceRoot
 	}
 	if configErr == nil {
-		dataDir, configErr = wire.ValidateExternalStateDirectory(
-			workspaceRoot,
-			dataDir,
-		)
+		if workspaceRoot == "" {
+			dataDir, configErr = wire.ResolveSupervisorStateDirectory(dataDir)
+		} else {
+			dataDir, configErr = wire.ValidateExternalStateDirectory(workspaceRoot, dataDir)
+		}
 		if configErr == nil {
 			// Keep subsequent setup reloads and Runtime wiring on the same
 			// canonical state root used by the persistent store.
@@ -307,7 +310,7 @@ func runWeb(
 						}
 					} else {
 						targetURL := held.Metadata.PublicURL
-						if held.Metadata.CapabilityToken != "" {
+						if workspaceRoot != "" && held.Metadata.CapabilityToken != "" {
 							workspaceID, registerErr := registerWorkspaceWithOwner(
 								ctx,
 								held.Metadata.PublicURL,
@@ -372,8 +375,10 @@ func runWeb(
 	address := listener.Addr().(*net.TCPAddr)
 	hostPort := net.JoinHostPort(options.host, strconv.Itoa(address.Port))
 	publicURL := "http://" + hostPort + "/"
-	workspaceURL := publicURL + "?workspace=" +
-		url.QueryEscape(workspaceIdentity.RootID)
+	workspaceURL := publicURL
+	if workspaceRoot != "" {
+		workspaceURL += "?workspace=" + url.QueryEscape(workspaceIdentity.RootID)
+	}
 	info := buildinfo.Current()
 	setupRequests := make(chan webSetupAttempt)
 	setupOptions := &webhost.SetupOptions{
@@ -543,7 +548,6 @@ func runWeb(
 		return waitForWebShutdown(ctx, httpServer, serveErr, server, nil, store, stderr, 1)
 	}
 	workspaceManager.Bind(server, options, store, repositories, stderr)
-	var active *preparedWebRuntime
 	activate := func(
 		candidate config.Snapshot,
 		candidateSelection webSetupSelection,
@@ -551,6 +555,11 @@ func runWeb(
 		secret string,
 		persist bool,
 	) error {
+		if workspaceRoot == "" {
+			return workspaceManager.configureWithoutRuntime(
+				ctx, candidateSelection, reference, secret, persist,
+			)
+		}
 		selectionPersisted := false
 		prepared, prepareErr := prepareWebRuntime(
 			ctx, options, candidate, candidateSelection, workspaceRoot,
@@ -611,7 +620,6 @@ func runWeb(
 				commitErr,
 			)
 		}
-		active = prepared
 		workspaceManager.RegisterInitial(workspaceIdentity, prepared)
 		loaded = candidate
 		selection = candidateSelection
@@ -621,7 +629,7 @@ func runWeb(
 
 	if setupRequired {
 		_, _ = fmt.Fprintf(stdout, "QCode Setup Ready: %s\n", publicURL)
-		for active == nil {
+		for !workspaceManager.Configured() {
 			select {
 			case attempt := <-setupRequests:
 				candidateSelection, reference, setupErr := resolveWebSetup(attempt.request)
@@ -813,9 +821,13 @@ func loadWebConfig(options webCommandOptions) (config.Snapshot, error) {
 }
 
 type preparedWebRuntime struct {
-	application         *wire.Session
-	extensions          *wire.SkillControlHandle
-	dependencies        webhost.Dependencies
+	*preparedWebCredentials
+	application  *wire.Session
+	extensions   *wire.SkillControlHandle
+	dependencies webhost.Dependencies
+}
+
+type preparedWebCredentials struct {
 	credentialActivate  func() error
 	credentialCommit    func() error
 	credentialRollback  func() error
@@ -837,68 +849,19 @@ func prepareWebRuntime(
 	stagedControl *credential.Control,
 	stagedReference credential.Reference,
 ) (_ *preparedWebRuntime, resultErr error) {
-	credentialControl := stagedControl
-	effectiveCredential := stagedReference
-	if credentialControl == nil {
-		var err error
-		credentialControl, effectiveCredential, err = credential.OpenControl(
-			ctx,
-			loaded.Config.State.DataDir,
-			webSupervisorScope,
-			selection.Provider,
-			credential.Reference{
-				Kind: loaded.Config.Credential.Kind,
-				Name: loaded.Config.Credential.Name,
-			},
-			func() credential.Reference {
-				if selection.Credential == nil {
-					return credential.Reference{}
-				}
-				return *selection.Credential
-			}(),
-		)
-		if err != nil {
-			return nil, fmt.Errorf("credential recovery: %w", err)
-		}
+	preparedCredentials, err := prepareWebCredentials(
+		ctx, loaded, selection, secret, stagedControl, stagedReference,
+	)
+	if err != nil {
+		return nil, err
 	}
-	var credentialActivate, credentialCommit, credentialRollback func() error
 	defer func() {
-		if resultErr != nil && credentialRollback != nil {
-			resultErr = errors.Join(resultErr, credentialRollback())
+		if resultErr != nil {
+			resultErr = errors.Join(resultErr, preparedCredentials.rollbackCredential())
 		}
 	}()
-	if secret != "" {
-		previousCredential := effectiveCredential
-		setupCredentials := credential.New(
-			effectiveCredential,
-			credential.WithControl(credentialControl),
-			credential.WithLiveReload(),
-		)
-		status, setErr := setupCredentials.StageKeyring(ctx, secret)
-		if setErr != nil {
-			return nil, fmt.Errorf("store setup credential: %w", setErr)
-		}
-		effectiveCredential = status.Reference
-		credentialActivate = func() error {
-			return credentialControl.Activate(
-				context.Background(),
-				status.Reference,
-			)
-		}
-		credentialCommit = func() error {
-			return credentialControl.Commit(
-				context.Background(),
-				status.Reference,
-			)
-		}
-		credentialRollback = func() error {
-			return credentialControl.Restore(
-				context.Background(),
-				status.Reference,
-				previousCredential,
-			)
-		}
-	}
+	credentialControl := preparedCredentials.credentialControl
+	effectiveCredential := preparedCredentials.credentialReference
 
 	runtimeOverrides := webConfigOverrides(options)
 	runtimeOverrides.Provider = &loaded.Config.Execution.Provider
@@ -993,12 +956,8 @@ func prepareWebRuntime(
 		}
 	}
 	return &preparedWebRuntime{
-		application: application, extensions: extensions,
-		credentialActivate:  credentialActivate,
-		credentialCommit:    credentialCommit,
-		credentialRollback:  credentialRollback,
-		credentialControl:   credentialControl,
-		credentialReference: effectiveCredential,
+		preparedWebCredentials: preparedCredentials,
+		application:            application, extensions: extensions,
 		dependencies: webhost.Dependencies{
 			Runtime: application.Runtime, WorkspaceRoot: workspaceRoot,
 			WorkspaceIdentity: workspaceIdentity,
@@ -1016,7 +975,82 @@ func prepareWebRuntime(
 	}, nil
 }
 
-func (p *preparedWebRuntime) activateCredential() error {
+func prepareWebCredentials(
+	ctx context.Context,
+	loaded config.Snapshot,
+	selection webSetupSelection,
+	secret string,
+	stagedControl *credential.Control,
+	stagedReference credential.Reference,
+) (*preparedWebCredentials, error) {
+	credentialControl := stagedControl
+	effectiveCredential := stagedReference
+	if credentialControl == nil {
+		var err error
+		credentialControl, effectiveCredential, err = credential.OpenControl(
+			ctx,
+			loaded.Config.State.DataDir,
+			webSupervisorScope,
+			selection.Provider,
+			credential.Reference{
+				Kind: loaded.Config.Credential.Kind,
+				Name: loaded.Config.Credential.Name,
+			},
+			func() credential.Reference {
+				if selection.Credential == nil {
+					return credential.Reference{}
+				}
+				return *selection.Credential
+			}(),
+		)
+		if err != nil {
+			return nil, fmt.Errorf("credential recovery: %w", err)
+		}
+	}
+	var credentialActivate, credentialCommit, credentialRollback func() error
+	if secret != "" {
+		previousCredential := effectiveCredential
+		setupCredentials := credential.New(
+			effectiveCredential,
+			credential.WithControl(credentialControl),
+			credential.WithLiveReload(),
+		)
+		status, setErr := setupCredentials.StageKeyring(ctx, secret)
+		if setErr != nil {
+			return nil, fmt.Errorf("store setup credential: %w", setErr)
+		}
+		effectiveCredential = status.Reference
+		credentialActivate = func() error {
+			return credentialControl.Activate(
+				context.Background(),
+				status.Reference,
+			)
+		}
+		credentialCommit = func() error {
+			return credentialControl.Commit(
+				context.Background(),
+				status.Reference,
+			)
+		}
+		credentialRollback = func() error {
+			return credentialControl.Restore(
+				context.Background(),
+				status.Reference,
+				previousCredential,
+			)
+		}
+	}
+
+	return &preparedWebCredentials{
+		credentialActivate:  credentialActivate,
+		credentialCommit:    credentialCommit,
+		credentialRollback:  credentialRollback,
+		credentialControl:   credentialControl,
+		credentialReference: effectiveCredential,
+	}, nil
+}
+
+func (p *preparedWebCredentials) activateCredential() error {
 	if p == nil || p.credentialActivate == nil {
 		return nil
 	}
@@ -1043,7 +1077,7 @@ func (p *preparedWebRuntime) close() {
 	closeWebRuntime(p.application)
 }
 
-func (p *preparedWebRuntime) commitCredential() error {
+func (p *preparedWebCredentials) commitCredential() error {
 	if p == nil || p.credentialCommit == nil {
 		return nil
 	}
@@ -1054,7 +1088,7 @@ func (p *preparedWebRuntime) commitCredential() error {
 	return commit()
 }
 
-func (p *preparedWebRuntime) rollbackCredential() error {
+func (p *preparedWebCredentials) rollbackCredential() error {
 	if p == nil || p.credentialRollback == nil {
 		return nil
 	}

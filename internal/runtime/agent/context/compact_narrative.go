@@ -198,7 +198,10 @@ func (p PreparedCompaction) digest() string {
 }
 
 type NarrativeLimits struct {
-	MaxInputBytes   int
+	MaxInputBytes int
+	// MaxOutputBytes is an optional operator ceiling. Zero means the
+	// summary route's advertised MaxOutputTokens and remaining context
+	// window decide the request budget.
 	MaxOutputBytes  int
 	MaxItems        int
 	ItemMaxBytes    int
@@ -447,8 +450,8 @@ func ValidateNarrativeJSON(
 		return NarrativeArtifact{}, err
 	}
 	limits = normalizeNarrativeLimits(limits)
-	if len(raw) == 0 || len(raw) > limits.MaxOutputBytes ||
-		!utf8.Valid(raw) {
+	if len(raw) == 0 || !utf8.Valid(raw) ||
+		limits.MaxOutputBytes > 0 && len(raw) > limits.MaxOutputBytes {
 		return NarrativeArtifact{}, errors.New("narrative output size or encoding is invalid")
 	}
 	var payload struct {
@@ -755,9 +758,6 @@ func normalizeNarrativeLimits(limits NarrativeLimits) NarrativeLimits {
 	defaults := DefaultNarrativeLimits()
 	if limits.MaxInputBytes <= 0 {
 		limits.MaxInputBytes = defaults.MaxInputBytes
-	}
-	if limits.MaxOutputBytes <= 0 {
-		limits.MaxOutputBytes = defaults.MaxOutputBytes
 	}
 	if limits.MaxItems <= 0 {
 		limits.MaxItems = defaults.MaxItems

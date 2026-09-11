@@ -67,7 +67,9 @@
   Goal、约束、未验证变更、当前请求和最近因果链。这些 mandatory 事实由每轮
   `session_state` 分区从 Ledger 投影，不依赖 compact 事件。`post_turn` Narrative
   只在 `turn.completed` 之后写可选 Digest 分区；用户暂停不得再调 summary 或
-  发出 fallback Compaction 卡片。Timeout 不得挡住下一轮 Sample；`route.summary` 的瞬时
+  发出 fallback Compaction 卡片。对话投影也不把 `post_turn` Narrative fallback
+  显示成压缩失败。`semantic_narrative_max_output_tokens = 0` 从 summary 模型
+  声明的 `MaxOutputTokens` 与剩余窗口推导，正值才是 Operator Ceiling。Timeout 不得挡住下一轮 Sample；`route.summary` 的瞬时
   429/5xx 走与主采样相同的 RetryPolicy，硬配额立即 fallback。完整 transcript 保留在
   Durable Journal，不作为模型上下文。TTFT、成本或缓存优化不得丢掉 mandatory
   用户语义，也不得用隐藏百分比替代公开的 `context.view.recent_tail_turns` 与
@@ -87,19 +89,18 @@
   outstanding Plan 标题，已读路径上限继承 `context.working_set.max_entries`。
   有行号命中时 Resume Fact 还列出 `Located sites`。`working_set` 只列路径；
   不要再次 `file_read`，除非即将编辑具体窗口。`search_text` /
-  `search_definition` 命中后，对该路径的 `file_read` 必须带 `start_line`。
+  `search_definition` 命中后优先读该窗口。
   已知缺陷用 `search_text` / `search_definition` 定位。单文件 `path` 仍按公开
   walk 字节上限搜索；空命中带 `skipped.large` 不表示符号不存在。已有行号命中
   后只读将编辑的窗口并立刻改，不要整文件翻页。取消或失败且未改文件的 Turn
   已记在 Checkpoint 里，不要用 `git_diff` 再确认。
-  脏的 `git_status` / `git_diff` 不是重读理由。可见 Tail 没有那次读取
-  不是重读理由，应走 `turn_history` / `result_get`；截断后先 `result_get`。
-  取消 Checkpoint 保留下一项 Plan 与已读路径指针。Paused Continue 恢复 Work
-  Item（当前用户句为 Goal，源 Turn KnownReads 开局写入），不得先用
-  `git_status`、`git_diff` 或整文件 `file_read` 巡视工作区。已知路径整文件重读
-  与 Continue git 巡视会被拒绝且不续租。Turn 一旦有 Known 或 Open，无签名变化
-  的 Sample 达到 `execution.implement_no_progress_samples`（默认 6）进入
-  Finish-only。同一路径再 edit 不续租。
+  脏的 `git_status` / `git_diff` 不是重读理由。覆盖范围内的已知读回放原结果；
+  无法回放或先前正文已不在当前 Sample 时放行必要重读。取消 Checkpoint 保留下一项
+  Plan 与已读路径指针。Paused Continue 恢复 Work Item（当前用户句为 Goal，源
+  Turn KnownReads 开局写入）；覆盖读回放，git 巡视放行。相邻 Sample 重复同一
+  工具调用身份达到 `execution.implement_no_progress_samples`（默认 6）进入
+  Finish-only，但此时不再收窄工具目录。不同 arguments 的同路径 edit 或验证不续
+  短租约，也不算空转。
 - 模型窗口、经济预算和 Provider Throughput 是三个独立容量平面。Operator 通过
   `execution.tokens_per_minute` 声明 TPM；`0` 表示未知，不发明按模型名称的默认值。
   合法工作集超过已知 Burst 或等待将超过预算时，先做一次 Visible Tail Fold 再

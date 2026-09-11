@@ -48,7 +48,6 @@ type Options struct {
 	Token         string
 	Build         string
 	Capacity      Capacity
-	OpenPath      func(context.Context, string) error
 	PickDirectory func(context.Context, string) (string, bool, error)
 	Setup         *SetupOptions
 	Workspaces    WorkspaceController
@@ -110,7 +109,6 @@ type Server struct {
 	build         string
 	index         []byte
 	capacity      Capacity
-	openPath      func(context.Context, string) error
 	pickDirectory directoryPicker
 	handler       http.Handler
 
@@ -145,7 +143,6 @@ type bootstrapResponse struct {
 	Draining         bool                        `json:"draining"`
 	WorkspaceRoot    string                      `json:"workspace_root,omitempty"`
 	Workspace        *protocol.WorkspaceIdentity `json:"workspace,omitempty"`
-	CanOpenPath      bool                        `json:"can_open_path"`
 	SetupRequired    bool                        `json:"setup_required,omitempty"`
 	SetupCatalog     *SetupCatalog               `json:"setup_catalog,omitempty"`
 	WorkspaceCatalog WorkspaceCatalog            `json:"workspace_catalog"`
@@ -189,7 +186,7 @@ func New(options Options) (*Server, error) {
 	server := &Server{
 		assets: options.Assets, expectedHost: options.ExpectedHost,
 		origin: options.Origin, token: token, build: options.Build, index: index,
-		capacity: options.Capacity.normalized(), openPath: options.OpenPath,
+		capacity:      options.Capacity.normalized(),
 		pickDirectory: options.PickDirectory,
 		setup:         options.Setup, workspaceControl: options.Workspaces,
 		modelControl: options.Models,
@@ -199,9 +196,6 @@ func New(options Options) (*Server, error) {
 		if err := server.setup.validate(); err != nil {
 			return nil, fmt.Errorf("web setup: %w", err)
 		}
-	}
-	if server.openPath == nil {
-		server.openPath = nativeTextPathOpener()
 	}
 	if server.pickDirectory == nil {
 		server.pickDirectory = nativeDirectoryPicker()
@@ -213,6 +207,15 @@ func New(options Options) (*Server, error) {
 func (s *Server) Handler() http.Handler { return s.handler }
 
 func (s *Server) CapabilityToken() string { return s.token }
+
+// ActivateSupervisor exposes the workspace catalog without inventing a Runtime
+// for an unselected directory.
+func (s *Server) ActivateSupervisor() {
+	s.mu.Lock()
+	s.bootProblem = nil
+	s.mu.Unlock()
+	s.ready.Store(true)
+}
 
 func (s *Server) Activate(dependencies Dependencies) error {
 	if err := s.activateWorkspace(dependencies, true); err != nil {
@@ -349,7 +352,6 @@ func (s *Server) bootstrap(w http.ResponseWriter, r *http.Request) {
 		Ready:           s.ready.Load(),
 		Draining:        s.draining.Load(),
 		WorkspaceRoot:   dependencies.WorkspaceRoot,
-		CanOpenPath:     s.openPath != nil,
 		Problem:         problem,
 	}
 	if s.workspaceControl != nil {
@@ -368,9 +370,11 @@ func (s *Server) bootstrap(w http.ResponseWriter, r *http.Request) {
 		identity := dependencies.WorkspaceIdentity
 		result.Workspace = &identity
 	} else if !result.Ready && s.setup != nil {
-		identity := s.setup.WorkspaceIdentity
-		result.WorkspaceRoot = s.setup.WorkspaceRoot
-		result.Workspace = &identity
+		if s.setup.WorkspaceIdentity.Version != 0 {
+			identity := s.setup.WorkspaceIdentity
+			result.WorkspaceRoot = s.setup.WorkspaceRoot
+			result.Workspace = &identity
+		}
 		result.SetupRequired = true
 	}
 	writeJSON(w, http.StatusOK, result)
@@ -507,7 +511,6 @@ func (s *Server) systemDescribe(
 		"protocol_version": webProtocol,
 		"workspace_root":   dependencies.WorkspaceRoot,
 		"workspace":        dependencies.WorkspaceIdentity,
-		"can_open_path":    s.openPath != nil,
 		"profile":          dependencies.DefaultProfile,
 		"features": []string{
 			"sessions", "events", "profiles", "agent_presets", "tools", "mcp_health",
@@ -1466,42 +1469,6 @@ func (s *Server) workspaceResource(
 		URI:             resourceURI,
 		DocumentVersion: 1,
 		ContentHandle:   contentHandle,
-	}, nil
-}
-
-func (s *Server) workspaceOpen(
-	r *http.Request,
-	dependencies Dependencies,
-) (any, error) {
-	if dependencies.Workspace == nil {
-		return nil, unavailable("workspace query is unavailable")
-	}
-	if s.openPath == nil {
-		return nil, unavailable("local file opening is unavailable")
-	}
-	var request struct {
-		Path string `json:"path"`
-	}
-	if err := s.decodeRequest(r, &request); err != nil {
-		return nil, err
-	}
-	target, err := dependencies.Workspace.ResolveFile(request.Path)
-	if err != nil {
-		return nil, workspaceQueryError(err)
-	}
-	if err := s.openPath(r.Context(), target); err != nil {
-		return nil, protocol.NewProblem(
-			protocol.CodeUnavailable,
-			"local editor could not open the workspace file",
-			true,
-			err,
-		)
-	}
-	return map[string]any{
-		"opened": true,
-		"path": path.Clean(
-			strings.ReplaceAll(strings.TrimSpace(request.Path), "\\", "/"),
-		),
 	}, nil
 }
 

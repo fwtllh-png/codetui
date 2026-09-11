@@ -112,7 +112,7 @@
 
 .contextDialogTabs small {
   color: var(--ch-text-caption);
-  font-size: 10px;
+  font-size: 11px;
   font-variant-numeric: tabular-nums;
 }
 
@@ -167,7 +167,7 @@
   padding: 0 10px 0 32px;
   background: var(--ch-panel);
   border: 1px solid var(--ch-border);
-  border-radius: 8px;
+  border-radius: var(--ch-radius-control);
   outline: 0;
   font-size: 12px;
 }
@@ -203,7 +203,7 @@
   color: var(--ch-text-secondary);
   text-align: left;
   background: transparent;
-  border-radius: 6px;
+  border-radius: var(--ch-radius);
 }
 
 .contextResults > button:hover,
@@ -233,7 +233,7 @@
 .contextResults > button small,
 .contextActionBar small {
   color: var(--ch-text-muted);
-  font-size: 10px;
+  font-size: 11px;
 }
 
 .contextPreview {
@@ -277,7 +277,7 @@
   color: var(--ch-text-secondary);
   background: var(--ch-panel-subtle);
   border: 1px solid var(--ch-border);
-  border-radius: 7px;
+  border-radius: var(--ch-radius-control);
   font-size: 11px;
 }
 
@@ -364,7 +364,7 @@
   color: var(--ch-text-secondary);
   background: var(--ch-code);
   border: 1px solid var(--ch-border);
-  border-radius: 8px;
+  border-radius: var(--ch-radius-control);
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
   font-size: 11px;
   line-height: 19px;
@@ -413,7 +413,7 @@
   text-align: left;
   background: transparent;
   border: 1px solid var(--ch-border);
-  border-radius: 8px;
+  border-radius: var(--ch-radius-control);
 }
 
 .diagnosticResults button:hover {
@@ -439,7 +439,7 @@
 
 .diagnosticResults small {
   color: var(--ch-text-muted);
-  font-size: 10px;
+  font-size: 11px;
 }
 
 @media (max-width: 720px) {

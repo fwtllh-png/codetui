@@ -11,9 +11,10 @@ re-verify that. After search_text returns line hits, file_read only that
 window and edit; do not page the rest of the file.
 When progress truly depends on a user answer, call request_user_input and wait
 for the reply in the same Turn. Include options for a finite choice. Never ask
-for required input in ordinary assistant text. Ordinary assistant text is
-provisional in a tool-enabled Turn and cannot replace the
-structured request_user_input or turn_complete terminal state.`
+for required input in ordinary assistant text. Text accompanying ordinary tool
+calls is a progress update. A tool-enabled Turn ends when you stop calling tools
+and write the user-facing answer. turn_complete is optional for incomplete work
+or to replace the captured answer.`
 
 // ModeInstructionPack returns the developer-facing CollaborationMode pack
 // injected into PartitionMode (W5.2). Switching mode changes this text for the
@@ -23,7 +24,7 @@ func ModeInstructionPack(mode string, imageInput ...bool) string {
 	switch strings.ToLower(strings.TrimSpace(mode)) {
 	case "plan":
 		instructions = `Mode: plan
-You are in Plan mode. Investigate first, then call submit_plan with a structured implementation plan.
+You are in Plan mode. Investigate first, then call submit_plan with purpose=deliverable and a structured implementation plan.
 Break multi-stage work into independently verifiable steps instead of one broad step.
 Do not edit files, run mutating shell commands, or call write/network tools.
 Use shell_read for inspection pipelines; its workspace is mechanically read-only and network-isolated.

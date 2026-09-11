@@ -13,50 +13,52 @@ import (
 type EventKind string
 
 const (
-	EventTurnStarted        EventKind = "turn.started"
-	EventOutputDelta        EventKind = "output.delta"
-	EventReasoningDelta     EventKind = "reasoning.delta"
-	EventReasoningCompleted EventKind = "reasoning.completed"
-	EventSearchResult       EventKind = "search.result"
-	EventCitation           EventKind = "citation"
-	EventUsage              EventKind = "usage"
-	EventProviderAttempt    EventKind = "provider.attempt"
-	EventToolState          EventKind = "tool.state"
-	EventToolStart          EventKind = "tool.start"
-	EventToolOutput         EventKind = "tool.output"
-	EventToolResult         EventKind = "tool.result"
-	EventToolCatalogChanged EventKind = "tool.catalog.changed"
-	EventMCPHealthChanged   EventKind = "mcp.health.changed"
-	EventExtensionControl   EventKind = "extension.control"
-	EventDiagnostics        EventKind = "diagnostics.result"
-	EventTurnCompleted      EventKind = "turn.completed"
-	EventTurnFailed         EventKind = "turn.failed"
-	EventTurnCanceled       EventKind = "turn.canceled"
-	EventOperationRejected  EventKind = "operation.rejected"
-	EventTurnSteered        EventKind = "turn.steered"
-	EventTurnQueued         EventKind = "turn.queued"
-	EventQueuedTurnUpdated  EventKind = "turn.queue.updated"
-	EventQueuedTurnRemoved  EventKind = "turn.queue.removed"
-	EventApprovalRequired   EventKind = "approval.required"
-	EventApprovalResolved   EventKind = "approval.resolved"
-	EventInputRequired      EventKind = "input.required"
-	EventInputResolved      EventKind = "input.resolved"
-	EventThreadCompacted    EventKind = "thread.compacted"
-	EventThreadForked       EventKind = "thread.forked"
-	EventTurnReverted       EventKind = "turn.reverted"
-	EventCheckpointCreated  EventKind = "checkpoint.created"
-	EventCheckpointRestored EventKind = "checkpoint.restored"
-	EventCheckpointForked   EventKind = "checkpoint.forked"
-	EventTurnCompaction     EventKind = "turn.compaction"
-	EventTurnVerification   EventKind = "turn.verification"
-	EventAgentSpawned       EventKind = "agent.spawned"
-	EventAgentStatus        EventKind = "agent.status"
-	EventAgentMessage       EventKind = "agent.message"
-	EventAgentIntegration   EventKind = "agent.integration"
-	EventPlanDelta          EventKind = "plan.delta"
-	EventCommandExecution   EventKind = "command.execution"
-	EventHostCommand        EventKind = "host.command"
-	EventExecutionReceipt   EventKind = "turn.receipt"
+	EventTurnStarted         EventKind = "turn.started"
+	EventOutputDelta         EventKind = "output.delta"
+	EventReasoningDelta      EventKind = "reasoning.delta"
+	EventCommentaryCompleted EventKind = "commentary.completed"
+	EventSessionTitleUpdated EventKind = "session.title.updated"
+	EventReasoningCompleted  EventKind = "reasoning.completed"
+	EventSearchResult        EventKind = "search.result"
+	EventCitation            EventKind = "citation"
+	EventUsage               EventKind = "usage"
+	EventProviderAttempt     EventKind = "provider.attempt"
+	EventToolState           EventKind = "tool.state"
+	EventToolStart           EventKind = "tool.start"
+	EventToolOutput          EventKind = "tool.output"
+	EventToolResult          EventKind = "tool.result"
+	EventToolCatalogChanged  EventKind = "tool.catalog.changed"
+	EventMCPHealthChanged    EventKind = "mcp.health.changed"
+	EventExtensionControl    EventKind = "extension.control"
+	EventDiagnostics         EventKind = "diagnostics.result"
+	EventTurnCompleted       EventKind = "turn.completed"
+	EventTurnFailed          EventKind = "turn.failed"
+	EventTurnCanceled        EventKind = "turn.canceled"
+	EventOperationRejected   EventKind = "operation.rejected"
+	EventTurnSteered         EventKind = "turn.steered"
+	EventTurnQueued          EventKind = "turn.queued"
+	EventQueuedTurnUpdated   EventKind = "turn.queue.updated"
+	EventQueuedTurnRemoved   EventKind = "turn.queue.removed"
+	EventApprovalRequired    EventKind = "approval.required"
+	EventApprovalResolved    EventKind = "approval.resolved"
+	EventInputRequired       EventKind = "input.required"
+	EventInputResolved       EventKind = "input.resolved"
+	EventThreadCompacted     EventKind = "thread.compacted"
+	EventThreadForked        EventKind = "thread.forked"
+	EventTurnReverted        EventKind = "turn.reverted"
+	EventCheckpointCreated   EventKind = "checkpoint.created"
+	EventCheckpointRestored  EventKind = "checkpoint.restored"
+	EventCheckpointForked    EventKind = "checkpoint.forked"
+	EventTurnCompaction      EventKind = "turn.compaction"
+	EventTurnVerification    EventKind = "turn.verification"
+	EventAgentSpawned        EventKind = "agent.spawned"
+	EventAgentStatus         EventKind = "agent.status"
+	EventAgentMessage        EventKind = "agent.message"
+	EventAgentIntegration    EventKind = "agent.integration"
+	EventPlanDelta           EventKind = "plan.delta"
+	EventCommandExecution    EventKind = "command.execution"
+	EventHostCommand         EventKind = "host.command"
+	EventExecutionReceipt    EventKind = "turn.receipt"
 )
 
 type EventData interface {
@@ -180,6 +182,47 @@ type OutputDeltaData TextDeltaData
 func (*OutputDeltaData) eventKind() EventKind { return EventOutputDelta }
 
 func (d *OutputDeltaData) validate() error { return (*TextDeltaData)(d).validate() }
+
+// CommentaryCompletedData is a confirmed, non-terminal assistant message.
+type CommentaryCompletedData struct {
+	MessageID string   `json:"message_id"`
+	SampleID  string   `json:"sample_id"`
+	Text      string   `json:"text"`
+	CallIDs   []string `json:"call_ids"`
+}
+
+type SessionTitleUpdatedData struct {
+	SessionID     string             `json:"session_id"`
+	Title         string             `json:"title"`
+	TitleSource   SessionTitleSource `json:"title_source"`
+	TitleRevision uint64             `json:"title_revision"`
+}
+
+func (*SessionTitleUpdatedData) eventKind() EventKind { return EventSessionTitleUpdated }
+func (d *SessionTitleUpdatedData) validate() error {
+	if !validProfileIdentifier(d.SessionID) || d.TitleRevision == 0 ||
+		(d.TitleSource != SessionTitleTemporary && d.TitleSource != SessionTitleAuto) {
+		return errors.New("session title update is invalid")
+	}
+	return ValidateSessionTitle(d.Title)
+}
+
+func (*CommentaryCompletedData) eventKind() EventKind { return EventCommentaryCompleted }
+
+func (d *CommentaryCompletedData) validate() error {
+	seen := make(map[string]bool, len(d.CallIDs))
+	for _, id := range d.CallIDs {
+		if strings.TrimSpace(id) == "" || seen[id] {
+			return errors.New("commentary call ids must be nonempty and unique")
+		}
+		seen[id] = true
+	}
+	return require(
+		strings.TrimSpace(d.MessageID) != "" && strings.TrimSpace(d.SampleID) != "" &&
+			strings.TrimSpace(d.Text) != "" && len(d.CallIDs) != 0,
+		"commentary message, sample, text and call ids are required",
+	)
+}
 
 type ReasoningDeltaData struct {
 	Text     string `json:"text"`
@@ -1445,13 +1488,14 @@ func (d *AgentMessageData) validate() error {
 }
 
 type PlanDeltaData struct {
-	Body            string `json:"body,omitempty"`
-	Done            bool   `json:"done,omitempty"`
-	ArtifactID      string `json:"artifact_id,omitempty"`
-	ProfileRevision uint64 `json:"profile_revision,omitempty"`
-	Status          string `json:"status,omitempty"`
-	CanImplement    bool   `json:"can_implement,omitempty"`
-	CanAutopilot    bool   `json:"can_autopilot,omitempty"`
+	Body            string      `json:"body,omitempty"`
+	Purpose         PlanPurpose `json:"purpose,omitempty"`
+	Done            bool        `json:"done,omitempty"`
+	ArtifactID      string      `json:"artifact_id,omitempty"`
+	ProfileRevision uint64      `json:"profile_revision,omitempty"`
+	Status          string      `json:"status,omitempty"`
+	CanImplement    bool        `json:"can_implement,omitempty"`
+	CanAutopilot    bool        `json:"can_autopilot,omitempty"`
 }
 
 func (*PlanDeltaData) eventKind() EventKind { return EventPlanDelta }
@@ -1461,11 +1505,14 @@ func (d *PlanDeltaData) validate() error {
 		strings.ContainsRune(d.Body, '\x00') {
 		return errors.New("plan delta body is invalid")
 	}
+	if err := validatePlanPurpose(d.Purpose, d.Body, d.CanImplement, d.CanAutopilot); err != nil {
+		return err
+	}
 	if d.ArtifactID != "" {
 		if !d.Done || !validProfileIdentifier(d.ArtifactID) ||
 			d.ProfileRevision == 0 ||
 			d.Status != string(PlanArtifactReady) ||
-			(!d.CanImplement && !d.CanAutopilot) {
+			(d.Purpose.Normalize() == PlanPurposeExecution && !d.CanImplement && !d.CanAutopilot) {
 			return errors.New("plan delta Artifact projection is invalid")
 		}
 	}

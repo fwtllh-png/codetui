@@ -48,6 +48,7 @@ type planMetadata struct {
 	Version                int                         `json:"version"`
 	SessionID              string                      `json:"session_id"`
 	Status                 protocol.PlanArtifactStatus `json:"status"`
+	Purpose                protocol.PlanPurpose        `json:"purpose,omitempty"`
 	ProfileRevision        uint64                      `json:"profile_revision"`
 	ExecutionProfileDigest string                      `json:"execution_profile_digest,omitempty"`
 	CanImplement           bool                        `json:"can_implement"`
@@ -445,6 +446,7 @@ func (r *Repository) SavePlan(
 		Version:                artifact.Version,
 		SessionID:              artifact.SessionID,
 		Status:                 artifact.Status,
+		Purpose:                artifact.Purpose,
 		ProfileRevision:        artifact.ProfileRevision,
 		ExecutionProfileDigest: artifact.ExecutionProfileDigest,
 		CanImplement:           artifact.CanImplement,
@@ -608,6 +610,7 @@ func decodePlanArtifact(
 		TurnID:                 value.TurnID,
 		Cursor:                 value.Cursor,
 		Status:                 metadata.Status,
+		Purpose:                metadata.Purpose,
 		Body:                   string(value.Content),
 		ProfileRevision:        metadata.ProfileRevision,
 		ExecutionProfileDigest: metadata.ExecutionProfileDigest,

@@ -517,9 +517,19 @@ func (s *Store) reconcile(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	seen := make(map[protocol.Cursor]eventlog.Record, len(records))
+	projections, err := s.committedProjections(ctx)
+	if err != nil {
+		return err
+	}
+	seen := make(map[protocol.Cursor]struct{}, len(records))
 	for _, record := range records {
-		seen[record.Event.Sequence] = record
+		seen[record.Event.Sequence] = struct{}{}
+		// Index and agent projections commit in the same transaction. A
+		// matching committed index needs verification, not another write.
+		if projected, ok := projections[record.Event.Sequence]; ok &&
+			projected.matches(record) {
+			continue
+		}
 		status, eventID, err := s.reservation(ctx, record.Event.Sequence)
 		if err != nil {
 			return err
@@ -586,6 +596,64 @@ func (s *Store) reconcile(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+type committedEventProjection struct {
+	eventID   protocol.EventID
+	threadID  protocol.ThreadID
+	turnID    protocol.TurnID
+	itemID    protocol.ItemID
+	kind      protocol.EventKind
+	offset    int64
+	length    int64
+	digest    string
+	createdAt string
+}
+
+func (p committedEventProjection) matches(record eventlog.Record) bool {
+	event, evidence := record.Event, record.Evidence
+	return p.eventID == event.ID &&
+		p.threadID == event.ThreadID && p.turnID == event.TurnID &&
+		p.itemID == event.ItemID && p.kind == event.Kind &&
+		p.offset == evidence.Offset && p.length == evidence.Length &&
+		p.digest == evidence.SHA256 && p.createdAt == timestamp(event.CreatedAt)
+}
+
+func (s *Store) committedProjections(
+	ctx context.Context,
+) (map[protocol.Cursor]committedEventProjection, error) {
+	rows, err := s.sqlite.DB().QueryContext(ctx, `
+		SELECT i.sequence, i.event_id, COALESCE(i.thread_id, ''),
+		       COALESCE(i.turn_id, ''), COALESCE(i.item_id, ''),
+		       i.kind, i.log_offset, i.log_length, i.sha256, i.created_at
+		FROM event_index i JOIN event_reservations r
+		  ON r.sequence = i.sequence AND r.event_id = i.event_id
+		WHERE r.status = 'committed'`)
+	if err != nil {
+		return nil, fmt.Errorf("read committed event projections: %w", err)
+	}
+	defer rows.Close()
+	projections := make(map[protocol.Cursor]committedEventProjection)
+	for rows.Next() {
+		var sequence protocol.Cursor
+		var projection committedEventProjection
+		if err := rows.Scan(
+			&sequence, &projection.eventID, &projection.threadID,
+			&projection.turnID, &projection.itemID, &projection.kind,
+			&projection.offset, &projection.length, &projection.digest,
+			&projection.createdAt,
+		); err != nil {
+			return nil, err
+		}
+		projections[sequence] = projection
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	return projections, nil
 }
 
 func nullString[T ~string](value T) any {

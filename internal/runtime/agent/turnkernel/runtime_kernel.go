@@ -971,6 +971,7 @@ func agentLifecycleProgressTool(name string) bool {
 
 func (s *RuntimeKernel) ObserveProgress(
 	signature string,
+	sampleIdentity string,
 ) (ProgressObservation, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -991,6 +992,7 @@ func (s *RuntimeKernel) ObserveProgress(
 	previousStage := current.Stage
 	if err := s.applyAuthoritativeLocked(ObserveProgress{
 		Signature:        signature,
+		SampleIdentity:   sampleIdentity,
 		CompletedSamples: completed,
 	}); err != nil {
 		return ProgressObservation{}, err

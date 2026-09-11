@@ -61,11 +61,13 @@ func newWorkspaceRuntimeManager(
 	if err != nil {
 		return nil, err
 	}
-	initialRoot, _, err = normalizeWorkspaceRoot(initialRoot)
-	if err != nil {
-		return nil, err
+	if initialRoot != "" {
+		initialRoot, _, err = normalizeWorkspaceRoot(initialRoot)
+		if err != nil {
+			return nil, err
+		}
+		roots = prependUniqueRoot(roots, initialRoot)
 	}
-	roots = prependUniqueRoot(roots, initialRoot)
 	return &workspaceRuntimeManager{
 		dataDir: dataDir, roots: roots,
 		active:   make(map[string]*preparedWebRuntime),
@@ -103,7 +105,69 @@ func (m *workspaceRuntimeManager) SetRoute(
 func (m *workspaceRuntimeManager) Configured() bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return len(m.active) != 0
+	return m.selection.Provider != ""
+}
+
+// Connection setup is Supervisor-owned and does not require a synthetic
+// Workspace or a Runtime with filesystem access.
+func (m *workspaceRuntimeManager) configureWithoutRuntime(
+	ctx context.Context,
+	selection webSetupSelection,
+	reference credential.Reference,
+	secret string,
+	persist bool,
+) (resultErr error) {
+	m.mu.Lock()
+	options := m.options
+	previous := m.selection
+	m.mu.Unlock()
+	loaded, err := loadWebSetupConfig(options, selection, reference)
+	if err != nil {
+		return err
+	}
+	prepared, err := prepareWebCredentials(
+		ctx, loaded, selection, secret, nil, credential.Reference{},
+	)
+	if err != nil {
+		return err
+	}
+	selectionPersisted := false
+	defer func() {
+		if resultErr == nil {
+			return
+		}
+		if selectionPersisted {
+			if previous.Provider != "" {
+				resultErr = errors.Join(resultErr, saveWebSetupSelection(m.dataDir, "", previous))
+			} else if err := os.Remove(setupSelectionPath(m.dataDir, "")); !errors.Is(err, os.ErrNotExist) {
+				resultErr = errors.Join(resultErr, err)
+			}
+		}
+		resultErr = errors.Join(resultErr, prepared.rollbackCredential())
+	}()
+	reference = prepared.credentialReference
+	if prepared.credentialActivate != nil {
+		value := reference
+		selection.Credential = &value
+	}
+	if persist {
+		if err := saveWebSetupSelection(m.dataDir, "", selection); err != nil {
+			return err
+		}
+		selectionPersisted = true
+	}
+	if err := m.Persist(); err != nil {
+		return err
+	}
+	if err := prepared.activateCredential(); err != nil {
+		return err
+	}
+	m.SetRoute(selection, reference)
+	m.server.ActivateSupervisor()
+	if err := prepared.commitCredential(); err != nil {
+		_, _ = fmt.Fprintf(m.stderr, "qcode: finalize credential rotation: %v\n", err)
+	}
+	return nil
 }
 
 func (m *workspaceRuntimeManager) Reconfigure(
@@ -320,7 +384,7 @@ func (m *workspaceRuntimeManager) replaceSelection(
 			true,
 			nil,
 		)
-	case len(m.active) == 0 || m.server == nil || m.store == nil:
+	case m.server == nil || m.store == nil:
 		m.mu.Unlock()
 		return protocol.ModelCatalog{}, errors.New("Workspace Runtime is unavailable")
 	}
@@ -350,6 +414,10 @@ func (m *workspaceRuntimeManager) replaceSelection(
 	}()
 
 	if err := idleWorkspaceRuntimes(ctx, active); err != nil {
+		return protocol.ModelCatalog{}, err
+	}
+	if len(active) == 0 {
+		err := m.configureWithoutRuntime(ctx, selection, reference, secret, true)
 		return protocol.ModelCatalog{}, err
 	}
 	ids := make([]string, 0, len(active))
@@ -607,6 +675,9 @@ func (m *workspaceRuntimeManager) Add(
 ) (webhost.WorkspaceDescriptor, error) {
 	root, identity, err := normalizeWorkspaceRoot(path)
 	if err != nil {
+		return webhost.WorkspaceDescriptor{}, invalidSetup(err.Error())
+	}
+	if _, err := wire.ValidateExternalStateDirectory(root, m.dataDir); err != nil {
 		return webhost.WorkspaceDescriptor{}, invalidSetup(err.Error())
 	}
 	for {

@@ -44,8 +44,10 @@ WebSocket Cursor、重连和有限本地 Projection；React 通过
 - Transcript 展示用户输入、GFM/数学/图片 Markdown 输出、Reasoning、Tool 和
   Terminal State；宽表格与长代码块在自身区域滚动，文件引用通过 Runtime 打开。
 - Conversation Navigator 从现有 Event Projection 派生 Turn、问题、Tool 和文件
-  索引；结果以稳定 Entry/Turn/Call/Path Identity 定位，并在分页、Tool 展开、
+  索引；结果以稳定 Entry/Turn/Call/Path Identity 定位，并在历史自动加载、Tool 展开、
   Session 切换和 Chat/Trajectory 往返时保留语义阅读锚点。
+- Transcript 通过最多 200 个业务节点的重叠滑动窗口限制 DOM；滚动至边界时自动读取或
+  显示历史，不用分页按钮。历史读取合并并发请求，切换会话后丢弃迟到响应，失败时显式重试。
 - Composer 支持提交、停止、Approval Decision 与 Input Reply。
 - Detail 展示 Profile、Changes、Checkpoint、Plan、Task、Agent、Usage 和 Extension。
 - Workspace 面板提供受边界限制的搜索与文本资源查看。

@@ -54,12 +54,19 @@ func TestExecCommandProducesDeclaredEvidenceWithoutLanguageDefaults(t *testing.T
 	if plain.Outcome.Facts.Verification != nil {
 		t.Fatal("plain execution invented verification coverage")
 	}
+	inferred := executeProcessTool(t, registry, processTestThread, "exec_command", map[string]any{
+		"command": "test -f input.txt", "covered_paths": []string{"input.txt"},
+	})
+	evidence := inferred.Outcome.Facts.Verification
+	if evidence == nil || evidence.Kind != "check" ||
+		evidence.Status != verify.StatusPassed {
+		t.Fatalf("covered_paths did not infer check evidence: %+v", evidence)
+	}
 }
 
 func TestExecCommandRejectsInvalidVerificationBeforeExecution(t *testing.T) {
 	registry, root := verificationRegistry(t)
 	for _, fields := range []map[string]any{
-		{"covered_paths": []string{"input.txt"}},
 		{"verification": "test"},
 		{"verification": "made_up", "covered_paths": []string{"input.txt"}},
 		{"verification": "test", "covered_paths": []string{"../outside"}},

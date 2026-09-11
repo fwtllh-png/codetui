@@ -3,7 +3,6 @@ package engine
 import (
 	"context"
 	"encoding/json"
-	"slices"
 	"strings"
 	"testing"
 
@@ -210,16 +209,11 @@ func TestReadOnlyAnswerCompletesFromEndTurnWithoutDeclarationRepair(t *testing.T
 	}
 }
 
-func TestWorkspaceChangeRequiresCompletionDeclaration(t *testing.T) {
+func TestWorkspaceChangeCompletesFromCapturedText(t *testing.T) {
 	registry := declarationRegistry(t, false)
 	runtime := &scriptedProvider{streams: []provider.Stream{
 		toolCallStream("write-1", "write_fixture", `{}`),
-		textStream("Next I will run the remaining validation."),
-		toolCallStream("complete-1", completiontool.Name, `{
-			"status":"complete",
-			"summary":"Implemented and verified.",
-			"pending_actions":[]
-		}`),
+		textStream("Implemented and verified."),
 	}}
 	engine := declarationEngine(t, runtime, registry, passedReceipt())
 	var events []Event
@@ -238,9 +232,8 @@ func TestWorkspaceChangeRequiresCompletionDeclaration(t *testing.T) {
 	if result.State != Completed || result.Text != "Implemented and verified." {
 		t.Fatalf("result = %+v", result)
 	}
-	if len(runtime.requests) != 3 ||
-		!requestContains(runtime.requests[2], "[completion_declaration_required]") {
-		t.Fatalf("requests did not contain declaration repair: %+v", runtime.requests)
+	if len(runtime.requests) != 2 {
+		t.Fatalf("requests = %d, want 2", len(runtime.requests))
 	}
 	verifyIndex, finalIndex := -1, -1
 	for index, event := range events {
@@ -254,76 +247,46 @@ func TestWorkspaceChangeRequiresCompletionDeclaration(t *testing.T) {
 	if verifyIndex < 0 || finalIndex < 0 || verifyIndex >= finalIndex {
 		t.Fatalf("verification must precede final answer: %+v", events)
 	}
-	for _, event := range events {
-		if event.Text == "Next I will run the remaining validation." {
-			t.Fatalf("pre-declaration text reached the stable output stream: %+v", events)
-		}
-	}
 }
 
-func TestAnswerMutationRequiresCompletionDeclaration(t *testing.T) {
+func TestAnswerMutationCompletesFromCapturedText(t *testing.T) {
 	registry := declarationRegistry(t, false)
 	runtime := &scriptedProvider{streams: []provider.Stream{
 		toolCallStream("write-1", "write_fixture", `{}`),
-		textStream("I changed the file without declaring completion."),
-		toolCallStream("complete-1", completiontool.Name, `{
-			"status":"complete",
-			"summary":"Implemented and verified.",
-			"pending_actions":[]
-		}`),
+		textStream("I changed the file and the review is complete."),
 	}}
 	engine := declarationEngine(t, runtime, registry, passedReceipt())
-	var events []Event
 
 	result, err := engine.RunForTurnWithIntentAndAttachments(
 		t.Context(), "turn-answer", "fix a.go",
-		protocol.TurnIntentAnswer, nil,
-		func(event Event) error {
-			events = append(events, event)
-			return nil
-		},
+		protocol.TurnIntentAnswer, nil, nil,
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.State != Completed || result.Text != "Implemented and verified." {
+	if result.State != Completed ||
+		result.Text != "I changed the file and the review is complete." {
 		t.Fatalf("result = %+v", result)
 	}
-	if len(runtime.requests) != 3 ||
-		!requestContains(runtime.requests[2], "[completion_declaration_required]") {
-		t.Fatalf("mutation did not activate completion gate: %+v", runtime.requests)
-	}
-	for _, event := range events {
-		if event.Text == "I changed the file without declaring completion." {
-			t.Fatalf("pre-declaration text reached the stable output stream: %+v", events)
-		}
+	if len(runtime.requests) != 2 {
+		t.Fatalf("requests = %d, want 2", len(runtime.requests))
 	}
 }
 
-func TestReadOnlyToolTurnRequiresCompletionDeclaration(t *testing.T) {
+func TestReadOnlyToolTurnCompletesFromCapturedText(t *testing.T) {
 	registry := declarationRegistry(t, false)
 	if err := registry.Register(&echoTool{}); err != nil {
 		t.Fatal(err)
 	}
 	runtime := &scriptedProvider{streams: []provider.Stream{
 		toolCallStream("read-1", "echo", `{"text":"evidence"}`),
-		textStream("I will now prepare the findings."),
-		toolCallStream("complete-1", completiontool.Name, `{
-			"status":"complete",
-			"summary":"The review is complete and the findings are ready.",
-			"pending_actions":[]
-		}`),
+		textStream("The review is complete and the findings are ready."),
 	}}
 	engine := declarationEngine(t, runtime, registry, passedReceipt())
-	var events []Event
 
 	result, err := engine.RunForTurnWithIntentAndAttachments(
 		t.Context(), "turn-read-only", "review the evidence",
-		protocol.TurnIntentAnswer, nil,
-		func(event Event) error {
-			events = append(events, event)
-			return nil
-		},
+		protocol.TurnIntentAnswer, nil, nil,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -332,26 +295,15 @@ func TestReadOnlyToolTurnRequiresCompletionDeclaration(t *testing.T) {
 		result.Text != "The review is complete and the findings are ready." {
 		t.Fatalf("result = %+v", result)
 	}
-	if len(runtime.requests) != 3 ||
-		!requestContains(runtime.requests[2], "[completion_declaration_required]") {
-		t.Fatalf("read-only tool requests = %+v", runtime.requests)
-	}
-	if slices.ContainsFunc(events, func(event Event) bool {
-		return event.Text == "I will now prepare the findings."
-	}) {
-		t.Fatalf("provisional narration reached stable output: %+v", events)
+	if len(runtime.requests) != 2 {
+		t.Fatalf("read-only tool requests = %d, want 2", len(runtime.requests))
 	}
 }
 
-func TestNoToolPlanRejectsPreparatoryNarration(t *testing.T) {
+func TestNoToolPlanCompletesFromCapturedText(t *testing.T) {
 	registry := declarationRegistry(t, false)
 	runtime := &scriptedProvider{streams: []provider.Stream{
 		textStream("I will now provide the implementation plan."),
-		toolCallStream("complete-1", completiontool.Name, `{
-			"status":"complete",
-			"summary":"The implementation plan is ready.",
-			"pending_actions":[]
-		}`),
 	}}
 	engine := declarationEngine(t, runtime, registry, passedReceipt())
 
@@ -363,32 +315,25 @@ func TestNoToolPlanRejectsPreparatoryNarration(t *testing.T) {
 		t.Fatal(err)
 	}
 	if result.State != Completed ||
-		result.Text != "The implementation plan is ready." ||
-		len(runtime.requests) != 2 ||
-		!requestContains(runtime.requests[1], "[completion_declaration_required]") {
+		result.Text != "I will now provide the implementation plan." ||
+		len(runtime.requests) != 1 {
 		t.Fatalf("result=%+v requests=%d", result, len(runtime.requests))
 	}
 	history := engine.History()
 	if len(history) == 0 {
-		t.Fatal("completed declaration did not commit history")
+		t.Fatal("completed text did not commit history")
 	}
 	final := history[len(history)-1]
 	if final.Role != provider.RoleAssistant ||
-		blocksText(final.Blocks) != "The implementation plan is ready." {
+		blocksText(final.Blocks) != "I will now provide the implementation plan." {
 		t.Fatalf("final history message = %+v", final)
 	}
 }
 
-func TestReadOnlyPlanDeclarationRepairConvergesAfterSingleRetry(t *testing.T) {
+func TestReadOnlyPlanCompletesOnFirstTextSample(t *testing.T) {
 	registry := declarationRegistry(t, false)
 	runtime := &scriptedProvider{streams: []provider.Stream{
-		textStream("I am checking the provider evidence."),
-		textStream("I am checking the persistence evidence."),
-		toolCallStream("complete-1", completiontool.Name, `{
-			"status":"complete",
-			"summary":"The R3, R4, and R5 evidence review is complete.",
-			"pending_actions":[]
-		}`),
+		textStream("The R3, R4, and R5 evidence review is complete."),
 	}}
 	engine := declarationEngine(t, runtime, registry, passedReceipt())
 
@@ -402,7 +347,7 @@ func TestReadOnlyPlanDeclarationRepairConvergesAfterSingleRetry(t *testing.T) {
 	}
 	if result.State != Completed ||
 		result.Text != "The R3, R4, and R5 evidence review is complete." ||
-		len(runtime.requests) != 3 {
+		len(runtime.requests) != 1 {
 		t.Fatalf("result=%+v requests=%d", result, len(runtime.requests))
 	}
 }
@@ -414,17 +359,10 @@ func TestIncompleteDeclarationStopsWithResumableBlockedOutcome(t *testing.T) {
 	}
 	runtime := &scriptedProvider{streams: []provider.Stream{
 		toolCallStream("read-1", "echo", `{"text":"first evidence"}`),
-		textStream("I still need to inspect the second piece of evidence."),
 		toolCallStream("incomplete-1", completiontool.Name, `{
 			"status":"incomplete",
 			"summary":"the second evidence check remains",
 			"pending_actions":["inspect the second piece of evidence"]
-		}`),
-		toolCallStream("read-2", "echo", `{"text":"second evidence"}`),
-		toolCallStream("complete-1", completiontool.Name, `{
-			"status":"complete",
-			"summary":"Both evidence checks are complete.",
-			"pending_actions":[]
 		}`),
 	}}
 	engine := declarationEngine(t, runtime, registry, passedReceipt())
@@ -445,16 +383,12 @@ func TestIncompleteDeclarationStopsWithResumableBlockedOutcome(t *testing.T) {
 	if result.State != Failed {
 		t.Fatalf("result = %+v", result)
 	}
-	if len(runtime.requests) != 3 ||
-		!requestContains(runtime.requests[2], "[completion_declaration_required]") {
+	if len(runtime.requests) != 2 {
 		t.Fatalf("incomplete declaration did not stop the turn: %+v",
 			runtime.requests)
 	}
 	sawBlockedDeclaration := false
 	for _, event := range events {
-		if event.Text == "I still need to inspect the second piece of evidence." {
-			t.Fatalf("future-work promise reached stable output: %+v", events)
-		}
 		if event.ToolCall != nil &&
 			event.ToolCall.ID == "incomplete-1" &&
 			event.Result != nil {
@@ -680,7 +614,7 @@ func TestVerificationRepairInvalidatesCompletionDeclaration(t *testing.T) {
 	}
 }
 
-func TestDeclarationRepairBudgetDoesNotResetWithoutAcceptedDeclaration(t *testing.T) {
+func TestHardVerificationRepairCompletesFromLaterText(t *testing.T) {
 	registry := declarationRegistry(t, true)
 	runtime := &scriptedProvider{streams: []provider.Stream{
 		toolCallStream("write-1", "write_fixture", `{}`),
@@ -689,15 +623,8 @@ func TestDeclarationRepairBudgetDoesNotResetWithoutAcceptedDeclaration(t *testin
 			"summary":"mutation complete",
 			"pending_actions":[]
 		}`),
-		textStream("I still need to declare completion."),
-		textStream("I still need to declare completion."),
 		toolCallStream("verify-1", "exec_command", `{"covered_paths":["a.go"]}`),
-		textStream("Quality evidence is now available."),
-		toolCallStream("complete-2", completiontool.Name, `{
-			"status":"complete",
-			"summary":"Implemented and verified.",
-			"pending_actions":[]
-		}`),
+		textStream("Implemented and verified."),
 	}}
 	engine := declarationEngine(t, runtime, registry, verify.Receipt{
 		Scope: verify.ScopeDiagnostics, Status: verify.StatusUnavailable,
@@ -705,15 +632,17 @@ func TestDeclarationRepairBudgetDoesNotResetWithoutAcceptedDeclaration(t *testin
 	})
 	engine.options.Verify.Mode = VerifyModeHard
 
-	_, err := engine.RunForTurnWithIntentAndAttachments(
+	result, err := engine.RunForTurnWithIntentAndAttachments(
 		t.Context(), "turn-progress", "change a.go",
 		protocol.TurnIntentWorkspaceChange, nil, nil,
 	)
-	if err == nil || !strings.Contains(err.Error(), "repair_budget") {
-		t.Fatalf("bounded declaration repair error = %v", err)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if len(runtime.requests) > 5 {
-		t.Fatalf("declaration repair exceeded bounded samples: %d", len(runtime.requests))
+	if result.State != Completed ||
+		result.Text != "Implemented and verified." ||
+		len(runtime.requests) != 4 {
+		t.Fatalf("result=%+v requests=%d", result, len(runtime.requests))
 	}
 }
 
@@ -782,16 +711,22 @@ func requestContains(request provider.ModelRequest, value string) bool {
 	return false
 }
 
-func TestDeclarationRepairPreservesNarrationForPreservedCompletion(t *testing.T) {
+func TestPreserveProvisionalAppendsClosingSummaryToCapturedText(t *testing.T) {
 	registry := declarationRegistry(t, false)
 	runtime := &scriptedProvider{streams: []provider.Stream{
-		textStream("The evidence review found three issues: R3, R4, and R5 are stale."),
-		toolCallStream("complete-1", completiontool.Name, `{
-			"status":"complete",
-			"summary":"Review complete.",
-			"output_mode":"preserve_provisional",
-			"pending_actions":[]
-		}`),
+		&providerfixture.SliceStream{Events: []provider.StreamEvent{
+			{Type: provider.EventTextDelta, Text: "The evidence review found three issues: R3, R4, and R5 are stale."},
+			{Type: provider.EventToolCallDelta, ToolCall: &provider.ToolCallFragment{
+				Index: 0, ID: "complete-1", Name: completiontool.Name,
+				Arguments: `{
+					"status":"complete",
+					"summary":"Review complete.",
+					"output_mode":"preserve_provisional",
+					"pending_actions":[]
+				}`,
+			}},
+			{Type: provider.EventMessageStop, StopReason: provider.StopReasonToolUse},
+		}},
 	}}
 	engine := declarationEngine(t, runtime, registry, passedReceipt())
 
@@ -808,10 +743,7 @@ func TestDeclarationRepairPreservesNarrationForPreservedCompletion(t *testing.T)
 	if result.State != Completed || result.Text != want {
 		t.Fatalf("result=%+v want=%q", result, want)
 	}
-	if len(runtime.requests) != 2 {
-		t.Fatalf("requests = %d, want one repair round trip", len(runtime.requests))
-	}
-	if !requestContains(runtime.requests[1], "preserve_provisional") {
-		t.Fatal("declaration repair feedback did not offer the preserve option")
+	if len(runtime.requests) != 1 {
+		t.Fatalf("requests = %d, want 1", len(runtime.requests))
 	}
 }

@@ -122,12 +122,16 @@ State，不接受 Operation；`BackgroundModule` 依次执行 MCP 初次 Refresh
 当 Web 启动时没有显式或已保存的 Provider/Model，Host 先进入受限 Setup 状态，不构造
 默认 Runtime。该状态只暴露受同源 Capability Token 保护的 `setup/apply`；用户提交的
 API Key 写入操作系统 Keyring，Provider、Model、Endpoint 与协议写入 Runtime 管理的
-非敏感 Setup Record。只有这些事实持久化成功后，Host 才调用 `wire.NewExec` 并
-`Activate` 完整 Web Runtime。
+非敏感 Setup Record。只有这些事实持久化成功后，Host 才为已添加的 Workspace 调用
+`wire.NewExec` 并激活 Runtime；没有 Workspace 时仅激活 Supervisor 的目录管理界面。
 
 Web 进程持有一个全局 Owner Lease 和持久化 Workspace Registry。首次启动创建
-Supervisor；其他目录再次执行 `qcode` 时，通过 Lease 中仅对当前用户可读的
-Capability Token 调用已有 Host 的 `workspace/add`，不会启动第二套控制面。每个
+Supervisor；普通 `qcode` 启动不把当前目录、安装目录或源码目录注册为 Workspace，
+仅恢复 Registry，空列表也是合法状态。启动器按配置 Provenance 区分 Runtime 内部默认值
+与用户显式指定的 Workspace。只有 `--workspace`、显式配置或用户添加目录时，
+才通过 Lease 中仅对当前用户可读的 Capability Token 调用已有 Host 的 `workspace/add`，
+不会启动第二套控制面。连接配置和凭证生命周期属于 Supervisor，零 Workspace 时
+不构造替代 Runtime 或授予目录访问权限；每次添加目录仍校验其与 State Root 不重叠。每个
 Workspace 单独拥有 `wire.Session`、Sandbox、Tool Registry、Repository Index 和
 MCP 生命周期。共享 SQLite 中的 Session、Event Recovery 与 Terminal Outbox
 按规范化 Workspace Root 过滤；关闭一个 Runtime 不能关闭 Supervisor 持有的共享
@@ -216,6 +220,34 @@ Event 分类是 Protocol 数据，而不是 Host Policy。`event_traits.json` �
 Class、Item Owner、Durability、Correlation 或 Terminal Trait 时生成直接失败。
 Go Benchmark 消费 `eventview` 的 Typed Semantic Update，不再分类 `Event.Data`。
 
+阶段说明使用独立的 `commentary.completed` 持久事件，包含稳定 Message ID、Sample ID、
+正文与关联 Call ID；Thread/Turn 归属来自事件信封。普通协议在完整逻辑采样成功后，
+将伴随常规工具调用的普通文本分类为阶段说明，并随采样结果原子写入 Kernel 状态，
+在执行工具前发布。纯文本、单独的 `turn_complete` 和收敛收尾仍使用现有暂存输出及完成
+门禁；阶段说明不进入最终答案、不计为工作进展、不提供审批或验证权威。
+重试与续传按逻辑 Sample 归并，未确认响应不发布。恢复时从已接受状态补发；终态 Outbox
+再次补发遗漏消息，与实时发布共用稳定 Event ID 去重，不新增消息数据库或后台摘要任务。
+Web 按 Message ID 保留独立节点，迟到补发的说明依据关联工具恢复 Chat 位置，不修改
+审计事件的 Sequence。Child Thread 复用同一链路，阶段说明留在对应 Subagent 执行块。
+原始 assistant history 保留正文，模型上下文仍服从已有的无状态投影和窗口策略，不把
+阶段说明重复注入 System 分区或升级为权威事实。
+
+会话自动命名是独立的非权威元数据操作：`SessionService` 在未命名会话的 Turn 被接受后
+立即调度无工具 `summary` 采样，不等待 Turn 成功结束，也不把 Prompt 截取为临时标题。
+结果返回前保留 `New Chat`。标题来源与独立命名版本放在
+既有 Session 生命周期元数据中，持久层以来源、版本及活动 Thread 做事务比较写入，
+不受置顶等无关修订干扰，不覆盖手动标题或复活已删除会话。`session.title.updated`
+通知 Web 刷新权威会话列表，而不是往 Chat 追加答案。同一会话单飞、同一 Turn 不重复命名，
+失败后允许后续 Turn 再尝试；旧 temporary 来源也可由真实模型结果替换。请求受 Runtime
+关闭取消，取得共享 Provider 并发许可后才开始计算摘要超时，避免排队耗尽实际采样时间。
+命名与主采样共享并发上限和 Retry-After，不因前台 Turn 活动而整轮禁用。Engine 在构造、
+Profile 和 Turn 边界发布配置快照，命名不获取整轮 Engine 锁；独立锁记账供后续预算检查使用。
+标题采样使用现有会话预算检查和 Usage 事件，既不修改业务终态，也不加入模型对话历史。
+
+Web 将正常采样、工具准备与执行、工具回填投影到单一运行状态栏，不为正常的
+`stop_reason=tool_use` 或成功工具结果创建聊天状态卡片。限流、重试、输出不完整和真正的
+终态错误仍保留可检查的提示；终态清除运行状态，历史重放使用同一投影规则。
+
 Web Unary Route 以 `internal/host/runtimeapi/web/contract.go` 为唯一清单。
 `webprotocolgen` 从该清单生成公开 Transport Manifest、TypeScript Route Union 和
 Go Handler Table；Handler 方法名由路由分段确定，例如 `session/create` 对应
@@ -225,7 +257,17 @@ Web Client 使用 Runtime Snapshot 完成 Hydration，再按当前 Workspace 的
 Event。持久层 Sequence 在 Supervisor 内全局严格单调，浏览器则按 Workspace 分别保存
 Cursor；只有对应 Runtime 明确报告 Retention Gap 时才进入 Desync。
 浏览器 Conversation Projection 对高频 Delta 按动画帧合并发布，并保持未变化业务节点
-的引用稳定。Trajectory Event Ledger 与 Chat 复用该事件窗口；`trace/query` 只补充
+的引用稳定。Chat 的终态、用量和刷新水位使用独立的非 Delta 事件视图，追加流式文本
+不重建这些统计；切换 Session、替换 Snapshot 或加载较早历史时重新建立该视图。
+历史消息的反馈回调与 Markdown 渲染保持稳定引用，避免每帧重复解析已完成回答。
+流式 Markdown 使用 React Deferred 更新让出高优先级输入，终态直接使用完整权威正文，
+不裁剪文本、不人为添加逐字延迟，也不按不可靠的字符串边界拆分 Markdown。
+对话区的阅读、文本选择及控件交互优先于底部跟随：在按下、键盘激活或获得焦点时
+保存实际交互目标的位置，流式更新与详情展开期间保持该锚点。用户滚动、主动导航、
+切换会话/视图或返回底部时解除交互锚定。程序恢复位置所产生的重复滚动事件不重新
+判断跟随意图；内容收起后仍遵守浏览器合法滚动范围，不人为增加空白空间。
+弹窗关闭只恢复焦点，不隐式滚回原触发控件；该焦点恢复也不能覆盖正在执行的显式导航。
+Trajectory Event Ledger 与 Chat 复用完整事件窗口；`trace/query` 只补充
 经过 Session/Turn 归属校验和字段白名单投影的时序，不返回任意 Span Attribute。
 Runtime 已验证并实际传给模型的图片输入会编码进 `turn.started`，使用户消息图片能够从
 持久化 Event 恢复；Presentation Snapshot 预算覆盖一个完整的最大图片输入。
@@ -287,40 +329,41 @@ Control State。Cancel、Steer、Approval、Input 统一进入 `ControlPort`；�
    Before/After 与 descriptor-relative Workspace API 之间提交或回滚。Git Metadata
    Mutation 由独立 VCS Broker 执行。
 10. 交互式主 Turn 必须选择合法 Runtime 状态：`request_user_input` 创建可持久化的 Input
-    Wait，Tool Call 继续同一个 Turn。未执行工具、没有 Mutation、Pending Tool 或 Workspace Change 的
-    只读 Answer/Plan，可以由带非空正文的 Provider `end_turn` 完成，避免纯文本直答仅为形式化声明再次
-    采样；执行过工具的 Turn 必须显式 `turn_complete`，防止中间叙述被误判为答案。其他 Turn
-    仍只有被接受的 `turn_complete` 才能结束，Provider `message_stop` 只结束一次 Sample，
-    普通模型正文保持 Provisional。    对于 `status=complete`，声明中的 `summary` 是精确的用户可见 Final Output，
-    Runtime 无需额外 Model Sample 即可发布。仅交付计划、未产生 Workspace Mutation
-    的 Answer/Plan Turn 可以在 Plan 步骤仍为 pending 时完成，把后续实现留给用户；
-    已开始执行计划或发生 Mutation 时，未完成步骤仍拒绝 `status=complete`，
-    `required_action` 是完成剩余步骤或 `status=incomplete`，而不是再次 `update_plan`。
+    Wait，Tool Call 继续同一个 Turn。停轮信号是模型停止调用工具并写出非空用户可见正文；
+    `turn_complete` 是可选的：`status=complete` 且 `output_mode=exact` 时用 `summary`
+    精确替换已捕获正文，`status=incomplete` 记录可恢复的 Pending Actions。
+    Provider `message_stop` 只结束一次 Sample。后续工具批次不再清空已捕获正文。
+    `submit_plan` 的 `purpose=deliverable` 保存未来实施方案，不替换当前执行清单、
+    不授予执行权限，也不参与完成门禁；因此仅交付计划的 Turn 即使写入了计划文件，
+    也可在该文件验证完成后结束，方案中的未来步骤仍为 pending。
+    `purpose=execution`（省略时的默认值）和 `update_plan` 管理当前执行清单，
+    但不构成完成门禁：未完成步骤留在 Session Plan 上供后续 Turn 继续。
     步骤签名未变的 `update_plan` 会被拒绝，不写 `plan.delta`，也不续期进展 Lease。
-    被拒绝的 `turn_complete` 调用身份不算结构化进展；同类拒绝耗尽 Declaration Repair
-    后进入 Convergence Finalization。Declaration Repair 不清空已捕获正文；单独的
-    `turn_complete` 提案也不使正文失效。已捕获正文非空时，`turn_complete` 可以使用
-    `output_mode=preserve_provisional` 保留正文并追加简短收尾（`exact` 模式仍以
-    `summary` 精确替换）；正文为空时该模式被拒绝。Runtime 不根据
-    正文措辞推断必需输入。Child Executor 没有 Input Host，不能等待用户
-    输入，但仍必须通过 Tool Call 继续或通过 `turn_complete` 完成。
+    被拒绝的 `turn_complete` 调用身份不算结构化进展。已捕获正文非空时，
+    `turn_complete` 可以使用 `output_mode=preserve_provisional` 保留正文并追加
+    简短收尾；正文为空时该模式被拒绝。Runtime 不根据正文措辞推断必需输入。
+    Child Executor 没有 Input Host，不能等待用户输入，但同样可以靠无工具正文停轮。
 11. `EvaluateTurnStep` 由 Reducer 选择 Repair、Verification、Finalize、Block 或
     Complete。Repair 与连续 No-progress 只会请求类型化 Kernel Convergence，不会由
     Engine 或 Provider 局部循环直接决定终态错误。Provider 输出不完整时没有默认累计
     Sample 上限，只要 Context 与显式 Token/Cost Budget 允许且持续产生结构化进展就继续。
-    非零 `MaxSteps` 是连续无进展的 Progress Lease：进展签名来自 Kernel Work Item
+    非零 `MaxSteps` 是连续无进展的 Progress Lease。进展签名仍来自 Kernel Work Item
     的路径集合（Goal、已读路径、已改路径、验证覆盖、Plan 完成步、接受的
-    Completion、未关闭 Process Session）。同一路径再次 `file_edit`、成功调用次数
-    或单纯 Mutation Revision 增长不会续期。Answer/Plan 首次纳入新已读路径仍算研究
-    进展；Open Implement（Plan 已有完成步骤且仍有 outstanding）时新 `file_read`
-    不续期。已知路径的整文件 `file_read` 与 Continue 上的 `git_status` /
-    `git_diff` 由准入拒绝，且不改变签名。约三分之一时提示收敛，约三分之二时
-    收窄为完成相关能力，完整 Lease 耗尽后进入一次受限 Finalization。Turn 一旦
-    具有 Known 或 Open Work Item，改用 `execution.implement_no_progress_samples`
-    （默认 6）作为三个阶段的一致权威：一半时提示收敛、全值进入 Finish-only、
-    再保留与 Step Lease 相同构造的 Repair 预算（默认 2+1+1+1=5）后强制
-    Finalization；`0` 仍继承 `max_steps` 的 2/3。该策略完全由调用方
-    显式预算与公开合同字段派生，不使用模型档位或绝对经验阈值。
+    Completion、未关闭 Process Session），用于续期长任务；停轮不看「同一路径是否
+    又改过一次」。No-progress 计数只在相邻 Sample 的工具调用身份（工具名 +
+    规范化 arguments）完全相同且签名也未变时递增。不同 arguments 的同路径
+    `file_edit`、验证命令或收尾声明都算仍在工作，与 Codex / Cursor 一样把
+    「模型停止发工具 / 提交 complete」当作正常结束，把「同一调用空转」当作循环。
+    已知路径的覆盖 `file_read` 回放原结果，无法回放时放行必要重读。Continue 上的
+    `git_status` / `git_diff` 放行，不因巡视失败消耗采样。约三分之一时提示收敛；
+    Finish-only 与 Token/Cost 预算只建议收尾，不再收窄工具目录。完整 Lease 耗尽后
+    进入一次只保留 Terminal/Input 能力的 Finalization。连续重复同一工具身份时改用
+    `execution.implement_no_progress_samples`（默认 6）作为三个阶段的一致权威：
+    一半时提示收敛、全值进入 Finish-only、再保留与 Step Lease 相同构造的 Repair
+    预算（默认 2+1+1+1=5）后强制 Finalization；`0` 仍继承 `max_steps` 的 2/3。
+    该策略完全由调用方显式预算与公开合同字段派生，不使用模型档位或绝对经验阈值。
+    默认 Verify 失败记录风险，不撤销已接受的 complete；仅 Hard + MustPass
+    才使声明失效。
     Tool Result 明确声明 `retry_original=false` 时，同一 Turn、同一 Workspace Revision
     下的完全相同调用会直接回放该失败事实；Workspace 发生变更后缓存失效，允许根据新状态重试。
     Kernel 允许一次只保留 Terminal/Input 能力的 Finalization Sample。Complete 进入
@@ -441,7 +484,15 @@ SQLite Schema 版本记录在 `PRAGMA user_version`，当前为版本 4。版本
 不做自动迁移。首次稳定基线前的开发迁移历史已有意压缩；公开版本后的 Schema
 变更必须继续在迁移链上追加显式步骤。
 
-Event Log 与 SQLite 投影之间的一致性以事件日志为准：启动时执行 reconcile；运行期
+Session 删除与 Discard 在同一 SQLite 事务中清理所有所属 Thread/Turn 的
+Domain Fact、Terminal Envelope 和 Terminal Outbox，再级联删除 Session 关系记录。
+这些 Kernel 表不依赖生命周期外键；清理失败必须回滚整个删除事务。审计 Event Log、
+事件索引与预留序号不随 Session 删除，以保留重放证据和全局序号水位。
+
+Event Log 与 SQLite 投影之间的一致性以事件日志为准：启动时仍完整校验日志，并批量
+读取已提交的事件投影。只有事件身份、归属、类型、时间、偏移、长度和摘要全部匹配，
+才跳过写入；缺失或不一致的投影仍按日志修复。事件索引、预留提交状态与 Agent Graph
+原子提交，因此健康启动不再逐条重复写投影。运行期
 追加遇到预留冲突或投影失败时，也会先按日志修复一次再重试同一事件。不确定的落盘
 结果保留预留状态，交由下一次对账裁决，不会写入重复记录；此前的干净失败则允许
 重试诚实地补写日志。
@@ -472,8 +523,13 @@ Plan Mode 的 Workspace 只读性由 Policy Effect 强制：普通 Write、写�
 与 Network 继续拒绝；Strong Sandbox 中最终归类为 `process.read_only` 的命令可执行，
 Resource 为 Session Plan 的低风险状态更新也可通过。`submit_plan`
 生成版本化 JSON Artifact，并在 Artifact Body 内记录 Revision、Supersedes Identity、
-步骤依赖、验证证据与文件摘要。Plan 在提交后自动批准并继续当前 Turn，不经过独立的
-用户审批或执行按钮。Runtime 在恢复时重新校验 Session/Thread/Profile 和文件摘要。
+步骤依赖、验证证据、用途与文件摘要。执行计划（`purpose=execution`）提交后自动批准
+并继续当前 Turn，不经过独立的用户审批或执行按钮。交付计划
+（`purpose=deliverable`）只保存为方案产物，不更新 Context 中的执行清单、
+不清空工具失败缓存，也不改变已有执行计划的授权；其 Artifact 不提供直接执行转换。
+用户后续要求实施时，模型须根据当前请求与 Workspace 状态提交执行计划，
+不能通过重标记旧 Artifact 绕过规划、审批或验证。
+Runtime 在恢复时重新校验 Session/Thread/Profile 和文件摘要。
 Plan Artifact 同时保存执行配置摘要；摘要覆盖 Mode、模型、工具集、审批姿态、执行目标
 和步骤预算，但不包含 Planning Policy。Planning Policy 变化不会让已提交计划失效，
 执行能力发生变化时仍会 Fail Closed 并要求重新规划。
@@ -482,10 +538,12 @@ Plan Artifact 同时保存执行配置摘要；摘要覆盖 Mode、模型、工�
 `adaptive` Planning Policy；Guard 在 Capability、Resource、Effect 和 Risk 已规范化后，
 拦截高风险、不可逆、网络写、外部写和 Agent Lifecycle 操作；非高风险且非不可逆的
 批量 Workspace 操作不因资源数量单独升级。成功的
-`submit_plan` Tool Result 才能推进 Turn-scoped `submitted/approved` 状态；文本声明不能
-解锁工具。Plan 只采用自动执行语义，每个 Turn 结束时状态归零。Continue 恢复自动批准
-的 Plan 时，必须由同一源 Turn 的 `plan.delta`、Execution Receipt Plan 与匹配的
+执行用途的 `submit_plan` Tool Result 才能推进 Turn-scoped `submitted/approved` 状态；
+文本声明和交付计划不能解锁工具。每个 Turn 结束时授权状态归零。Continue 恢复自动批准
+的执行 Plan 时，必须由同一源 Turn 的执行用途 `plan.delta`、Execution Receipt Plan 与匹配的
 Profile Revision 共同证明，不能仅凭恢复 Prompt 中的 Plan 文本重新授权。
+交付计划不进入 Context Checkpoint 的执行清单，Continue/Retry 不会自动绑定其执行权限；
+同一 Turn 后提交的交付计划也不能替换先前执行计划的恢复绑定。
 
 Turn 的 Model Route 继续在 Scope 创建时冻结。独立 Plan Mode 选择 `PurposePlan`；
 Act 内规划选择 `PurposeAct`，因此 Auto 流程可以在同一 Turn 中从规划继续执行，而不会
@@ -496,6 +554,24 @@ Workspace Git 状态由 `internal/platform/workspacequery` 在已绑定沙箱中
 Turn 或待处理 Operation 时拒绝切换。Session 列表聚合同时保存
 `session_id -> workspace_id` 来源映射，所有 Session 请求固定使用 Owner Workspace，
 不从切换中的 UI 状态临时推断。
+
+Git 悬浮窗通过只读 `workspace/git-status` 与 `workspace/git-diff` 查询当前 Workspace：
+使用 NUL 分隔的 porcelain/numstat 记录，路径按字面值匹配，不以显示文本解析文件名；
+Diff 禁用外部驱动和 textconv。忽略与跳过路径不进入可预览清单，未跟踪文件内容沿用
+Workspace Resource 的常规文件和编码检查。每条 Git 查询的公开字节上限
+`workspacequery.GitInspectMaxBytes` 继承 Resource 的 1 MiB 限制，截断直接报告错误，
+不把部分统计当作完整结果。查询显式绑定 Workspace，切换或关闭窗口时取消旧请求，
+不写入 Git Index、Session 或 Turn 历史。`workspace/git-action` 将结构化 Git 命令交给
+Runtime `GitControl`；Host 不执行工具，Runtime 不启动 Turn 或调用模型。
+`wire` 为每次显式操作构造独立 Guard，沿用策略、仓库规则、Constitution、Journal 和
+Lease Authority，仅将按钮确认映射为该次固定工具调用的 once 授权，不复用 Agent 的审批缓存。
+Git 操作与 Turn 共享 Workspace 排他准入，有待处理 Operation 或排队 Prompt 时拒绝执行；
+占用只计入 Workspace，不把 Session 投影为运行中的 Turn，期间拒绝冲突的 Session 生命周期
+与 Profile 修改。关闭 Runtime 会取消并等待正在执行的 Git 操作。
+HEAD、完整暂存差异与本地 Git 配置共同形成状态版本，旧版本提交在执行前拒绝；
+提交前重新核对全部暂存路径，Git 路径使用 literal pathspec，不让路径表达式扩大暂存范围。
+提交与推送分别返回完成事实；推送失败不能回滚已经完成的提交，也不自动重放。
+这些显式操作不进入 Turn 恢复队列，网络中断后由用户刷新 Git 状态再决定下一步。
 
 Provider Replay State 同时绑定 Adapter、Provider 和 Model。Router 在目标 Route 改变时
 清除不兼容的原生 Replay，仅保留可见 Assistant 内容，避免同 Adapter 跨模型切换后因
@@ -517,9 +593,10 @@ Dynamic（History 之后）追加一块 write-once Checkpoint。旧 Turn 原文�
 Plan 已有完成步骤或已读路径时，`session_state` 另带 Resume Fact，避免
 Continue / Retry / 新 prompt 把已读文件再读一遍；有行号命中时列出
 `Located sites`。搜索命中后对该路径的 `file_read` 必须带 `start_line`。
-Turn 的 Work Item 一旦有 Known 或 Open，无签名变化的 Sample 达到
+相邻 Sample 重复同一工具调用身份达到
 `execution.implement_no_progress_samples`（默认 6）即进入 Finish-only；该阶段
-不允许 `git_status` / `git_diff` 或整文件读取。已知路径整文件 `file_read` 与
+不允许 `git_status` / `git_diff` 或整文件读取。不同 arguments 的验证或同路径
+修正不进入该短租约。已知路径整文件 `file_read` 与
 Continue 巡视 git 在工具执行前被拒绝，不续租。脏的 `git_status` /
 `git_diff` 或可见 Tail 没有那次读取都不是重读理由，应走 `turn_history` /
 `result_get`。取消和失败 Checkpoint 均保留下一项 Plan 与已读路径指针，但不带未提交的半开

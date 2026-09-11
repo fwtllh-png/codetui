@@ -28,6 +28,22 @@ func Validate(state State) error {
 		state.RepairBudgets == nil {
 		return errors.New("turn ledgers are nil")
 	}
+	commentarySamples := make(map[string]bool, len(state.Commentary))
+	for _, message := range state.Commentary {
+		if commentarySamples[message.SampleID] ||
+			state.SampleLedger[message.SampleID].Status != SampleCompleted ||
+			strings.TrimSpace(message.Text) == "" || len(message.CallIDs) == 0 {
+			return errors.New("invalid commentary sample")
+		}
+		commentarySamples[message.SampleID] = true
+		calls := make(map[string]bool, len(message.CallIDs))
+		for _, id := range message.CallIDs {
+			if strings.TrimSpace(id) == "" || calls[id] {
+				return errors.New("invalid commentary call identity")
+			}
+			calls[id] = true
+		}
+	}
 	for sampleID, sample := range state.SampleLedger {
 		if strings.TrimSpace(sampleID) == "" ||
 			sample.ID != sampleID {
@@ -486,6 +502,10 @@ func cloneState(state State) State {
 		state.ProvisionalOutput...,
 	)
 	cloned.FinalOutput = append([]string(nil), state.FinalOutput...)
+	cloned.Commentary = append([]Commentary(nil), state.Commentary...)
+	for index := range cloned.Commentary {
+		cloned.Commentary[index].CallIDs = append([]string(nil), state.Commentary[index].CallIDs...)
+	}
 	cloned.Verification.EvidenceCalls = append(
 		[]string(nil),
 		state.Verification.EvidenceCalls...,

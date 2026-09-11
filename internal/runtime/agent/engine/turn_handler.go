@@ -25,11 +25,17 @@ func (e *Engine) Execute(
 	request TurnRequest,
 	emit func(Event) error,
 ) (result Result, resultErr error) {
+	e.mu.Lock()
+	providerGate := e.options.SharedRateLimit
+	e.mu.Unlock()
+	releasePriority := providerGate.BeginForegroundTurn(ctx)
+	defer releasePriority()
 	// Join before taking e.mu: the pending narrative settles under e.mu, so
 	// waiting while holding it would deadlock with the settling goroutine.
 	e.joinPendingNarrative()
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	e.syncSessionTitleState(provider.Usage{})
 	spec, persistedTurnID, err := e.prepareTurnSpec(
 		ctx,
 		request,
@@ -358,6 +364,9 @@ func (s *Scope) Run(ctx context.Context) (result Result, resultErr error) {
 	terminal.setRelease(releaseCoordinator)
 	send := terminal.send
 	defer terminal.finish(ctx, &result, &resultErr)
+	for _, message := range kernel.CommentaryMessages() {
+		terminal.publishCommentary(&message)
+	}
 	contextFinalized := false
 	defer func() {
 		if contextFinalized {
@@ -685,8 +694,7 @@ func (s *Scope) Run(ctx context.Context) (result Result, resultErr error) {
 			provider.ProducedAssistant(spec.Route, blocks, e.turn, nil),
 		)
 		toolCtx := ctx
-		if progress.Stage == turnkernel.ProgressStageFinishOnly ||
-			kernel.Convergence() != nil {
+		if kernel.Convergence() != nil {
 			toolCtx = tool.WithFinishOnly(ctx)
 		}
 		results, err := e.runToolsWithCache(
@@ -1003,6 +1011,7 @@ func (s *Scope) Run(ctx context.Context) (result Result, resultErr error) {
 		}
 		return true, nil
 	}
+	lastSampleIdentity := ""
 	for step := 0; ; step++ {
 		if e.appendSteering(&transaction) && kernel.Completion() != nil {
 			if err := invalidateCompletion("turn_steered"); err != nil {
@@ -1020,7 +1029,10 @@ func (s *Scope) Run(ctx context.Context) (result Result, resultErr error) {
 			}
 		}
 		progressSignature := e.progressSignature(kernel)
-		progress, err = kernel.ObserveProgress(progressSignature)
+		progress, err = kernel.ObserveProgress(
+			progressSignature,
+			lastSampleIdentity,
+		)
 		if err != nil {
 			return result, err
 		}
@@ -1131,6 +1143,16 @@ func (s *Scope) Run(ctx context.Context) (result Result, resultErr error) {
 		); finishErr != nil {
 			return result, errors.Join(err, finishErr)
 		}
+		states := make([]turnkernel.ToolCallState, 0, len(calls))
+		for _, call := range calls {
+			states = append(states, turnkernel.ToolCallState{
+				Name: call.Name, Arguments: call.Arguments,
+			})
+		}
+		lastSampleIdentity = turnkernel.FormatToolCallsIdentity(states)
+		if err == nil {
+			terminal.publishCommentary(kernel.SampleCommentary(sampleID))
+		}
 		reasoning := providerassembly.BlocksReasoning(blocks)
 		if strings.TrimSpace(reasoning) != "" {
 			if sendErr := send(Streaming, Event{
@@ -1209,7 +1231,7 @@ func (s *Scope) Run(ctx context.Context) (result Result, resultErr error) {
 			),
 		)
 		toolCtx := ctx
-		if progress.Stage == turnkernel.ProgressStageFinishOnly {
+		if kernel.Convergence() != nil {
 			toolCtx = tool.WithFinishOnly(ctx)
 		}
 		results, err := e.runToolsWithCache(

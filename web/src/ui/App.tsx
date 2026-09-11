@@ -9,18 +9,20 @@ import {
   ChevronUp,
   CirclePause,
   CircleStop,
-  Download,
   FileCode2,
   FolderPlus,
   FolderOpen,
   GitFork,
+  GitBranch,
   LoaderCircle,
   ListPlus,
   KeyRound,
+  MessageSquarePlus,
   MoreHorizontal,
   Paperclip,
   PanelLeftClose,
   PanelLeftOpen,
+  Menu,
   Pencil,
   Pin,
   PinOff,
@@ -50,6 +52,15 @@ import {
   useSyncExternalStore,
   type ReactNode
 } from "react";
+import {ExecutionStages} from "./ExecutionStages";
+import {Collapse} from "./primitives/Collapse";
+import {IconButton} from "./primitives/IconButton";
+import {Skeleton} from "./primitives/Skeleton";
+import {useMediaQuery} from "./primitives/useMediaQuery";
+import {useModalFocus} from "./primitives/useModalFocus";
+import {Presence} from "./primitives/Presence";
+import {useMotionEnabled} from "./primitives/motion";
+import {usePresentationEvents} from "./usePresentationEvents";
 import type {
   RuntimeEvent,
   SessionCheckpoint,
@@ -137,9 +148,6 @@ const ComposerAttachments = lazy(async () => ({
 const ComposerCommandMenu = lazy(async () => ({
   default: (await import("./ComposerCommandMenu")).ComposerCommandMenu
 }));
-const ProducedFiles = lazy(async () => ({
-  default: (await import("./ProducedFiles")).ProducedFiles
-}));
 const SessionProgress = lazy(async () => ({
   default: (await import("./SessionProgress")).SessionProgress
 }));
@@ -152,6 +160,9 @@ const BackgroundActivityMonitor = lazy(async () => ({
 const ConversationNavigator = lazy(async () => ({
   default: (await import("./ConversationNavigator")).ConversationNavigator
 }));
+const GitTools = lazy(async () => ({
+  default: (await import("./GitTools")).GitTools
+}));
 const MarkdownMessage = lazy(async () => ({
   default: (await import("./MarkdownMessage")).MarkdownMessage
 }));
@@ -160,7 +171,7 @@ interface TranscriptReadingPosition {
   readonly entryID: string;
   readonly top: number;
   readonly scrollTop: number;
-  readonly page: number;
+  readonly windowEndID?: string;
   readonly atBottom: boolean;
 }
 
@@ -219,6 +230,25 @@ export function App({client}: Props) {
   const [draftOwner, setDraftOwner] = useState("");
   const [contextOpen, setContextOpen] = useState(false);
   const [railCollapsed, setRailCollapsed] = useState(initialRailCollapsed);
+  const [mobileRailOpen, setMobileRailOpen] = useState(false);
+  const [gitOpen, setGitOpen] = useState(true);
+  const restoreGitFocus = useRef(false);
+  useEffect(() => {
+    if (!gitOpen && restoreGitFocus.current) {
+      restoreGitFocus.current = false;
+      document.querySelector<HTMLButtonElement>('[aria-controls="git-tools"]')?.focus();
+    }
+  }, [gitOpen]);
+  const motionEnabled = useMotionEnabled();
+  const compactViewport = useMediaQuery(`(max-width: ${experience.layout.compactBreakpoint}px)`);
+  const railRef = useRef<HTMLElement>(null);
+  useModalFocus(railRef, compactViewport && mobileRailOpen, () => setMobileRailOpen(false));
+  useEffect(() => {
+    setMobileRailOpen(false);
+  }, [snapshot.selectedSessionID, snapshot.selectedWorkspaceID]);
+  useEffect(() => {
+    setGitOpen(true);
+  }, [snapshot.selectedWorkspaceID]);
   const [railWidth, setRailWidth] = useState(
     () => storedPanelWidth(
       "ch.sidebar.width",
@@ -238,6 +268,7 @@ export function App({client}: Props) {
     useState<BackgroundActivityTarget>();
   const [submitting, setSubmitting] = useState(false);
   const [creatingSession, setCreatingSession] = useState(false);
+  const [creatingWorkspaceID, setCreatingWorkspaceID] = useState("");
   const [localError, setLocalError] = useState("");
   const [composerAttachments, setComposerAttachments] =
     useState<ComposerAttachment[]>([]);
@@ -253,7 +284,15 @@ export function App({client}: Props) {
   }>();
   const [newIsolation, setNewIsolation] =
     useState<"shared" | "worktree">(initialSessionIsolation);
-  const [transcriptPage, setTranscriptPage] = useState(0);
+  const [transcriptWindowEndID, setTranscriptWindowEndID] = useState<string>();
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState("");
+  const historyLoadRef = useRef<object>();
+  const historyTopRef = useRef<HTMLDivElement>(null);
+  const historyBottomRef = useRef<HTMLDivElement>(null);
+  const scrollTopRef = useRef(0);
+  const scrollDirectionRef = useRef<-1 | 0 | 1>(0);
+  const readAndAdvanceRef = useRef<() => void>(() => {});
   const [conversationNavigatorOpen, setConversationNavigatorOpen] =
     useState(false);
   const [readerEntryID, setReaderEntryID] = useState("");
@@ -265,6 +304,7 @@ export function App({client}: Props) {
   const readingPositionsRef =
     useRef(new Map<string, TranscriptReadingPosition>());
   const pendingReadingRestoreRef = useRef<TranscriptReadingPosition>();
+  const interactionAnchorRef = useRef<{element: Element; top: number}>();
   const readerFrameRef = useRef<number>();
   const navigationReaderLockRef = useRef("");
   const navigationReaderLockTimerRef = useRef<number>();
@@ -290,6 +330,18 @@ export function App({client}: Props) {
     (workspace) =>
       workspace.id === snapshot.selectedWorkspaceID && workspace.ready
   );
+  const gitWorkspaceBusy = snapshot.sessions.some((item) =>
+    item.workspace_root === selectedWorkspace?.root && sessionIsBusy(item)
+  );
+  const gitMutationDisabled = selected && selected.isolation !== "shared"
+      ? "Workspace actions require a shared session."
+      : gitWorkspaceBusy
+        ? "Finish active work before changing Git state."
+        : selected?.status === "blocked" || selected?.status === "interrupted"
+          ? "Resume or resolve the interrupted turn first."
+          : snapshot.profile?.profile.mode === "plan" || snapshot.profile?.profile.approval_posture === "never"
+            ? "Git changes are unavailable in read-only mode."
+            : selected?.archived ? "This session is archived." : "";
   const workspaceRemoval = snapshot.workspaces.find(
     (workspace) => workspace.id === workspaceRemovalID && workspace.removable
   );
@@ -301,21 +353,24 @@ export function App({client}: Props) {
     [snapshot.conversation]
   );
   const entries = useMemo(
-    () => projectedEntries.filter((entry) => entry.kind !== "receipt"),
+    () => projectedEntries.filter((entry) =>
+      entry.kind !== "receipt" && entry.kind !== "deliverables"
+    ),
     [projectedEntries]
   );
+  const presentationEvents = usePresentationEvents(snapshot.events);
   const terminalTurns = useMemo(
-    () => terminalTurnKinds(snapshot.events),
-    [snapshot.events]
+    () => terminalTurnKinds(presentationEvents),
+    [presentationEvents]
   );
   const resumableTurnID = selected?.status === "blocked" ||
       selected?.status === "interrupted"
     ? selected.latest_turn_id
     : "";
-  const transcriptEnd = Math.max(
-    0,
-    entries.length - transcriptPage * transcriptPageStep
-  );
+  const windowEndIndex = !atBottom && transcriptWindowEndID
+    ? entries.findIndex((entry) => entry.id === transcriptWindowEndID)
+    : -1;
+  const transcriptEnd = windowEndIndex >= 0 ? windowEndIndex + 1 : entries.length;
   const transcriptStart = Math.max(0, transcriptEnd - transcriptPageSize);
   const visibleEntries = entries.slice(transcriptStart, transcriptEnd);
   const conversationNavigation = useMemo(
@@ -363,15 +418,7 @@ export function App({client}: Props) {
       setCancelingTurnID("");
     }
   }, [activeTurn]);
-  const traceRefreshSequence = snapshot.events.reduce(
-    (sequence, event) =>
-        event.kind !== "output.delta" &&
-        event.kind !== "reasoning.delta" &&
-        event.kind !== "tool.output"
-        ? event.sequence
-        : sequence,
-    0
-  );
+  const traceRefreshSequence = presentationEvents.at(-1)?.sequence ?? 0;
   const selectedProvider = snapshot.profile?.profile.provider ?? "";
   const selectedModel = snapshot.profile?.profile.model ?? "";
   const selectedModelEntry = snapshot.models.find(
@@ -396,12 +443,12 @@ export function App({client}: Props) {
       entry.kind === "receipt"
   );
   const turnChrome = useMemo(
-    () => projectMessageChrome(snapshot.events),
-    [snapshot.events]
+    () => projectMessageChrome(presentationEvents),
+    [presentationEvents]
   );
   const contextAttribution = useMemo(
-    () => latestContextAttribution(snapshot.events),
-    [snapshot.events]
+    () => latestContextAttribution(presentationEvents),
+    [presentationEvents]
   );
   const blankSession = Boolean(
     selected && entries.length === 0 && !snapshot.hydratingSessionID
@@ -444,25 +491,142 @@ export function App({client}: Props) {
     if (!node) return undefined;
     const position = readTranscriptPosition(
       node,
-      transcriptPage,
+      transcriptWindowEndID,
       atBottomRef.current
     );
     if (!position) return undefined;
     readingPositionsRef.current.set(snapshot.selectedSessionID, position);
     setReaderEntryID(transcriptFocusEntryID(node) ?? position.entryID);
     return position;
-  }, [activeView, snapshot.selectedSessionID, transcriptPage]);
+  }, [activeView, snapshot.selectedSessionID, transcriptWindowEndID]);
   const scheduleReadingPositionCapture = useCallback(() => {
     if (readerFrameRef.current !== undefined) return;
     readerFrameRef.current = window.requestAnimationFrame(() => {
       readerFrameRef.current = undefined;
-      captureReadingPosition();
+      readAndAdvanceRef.current();
     });
+  }, []);
+  const prepareTranscriptInteraction = useCallback((target: EventTarget | null) => {
+    const node = transcriptRef.current;
+    if (!node || !(target instanceof Element) ||
+        !transcriptContentRef.current?.contains(target)) return;
+    // Reading, selecting and activating transcript content take priority over
+    // following new output. Capture before focus/click can change its geometry.
+    atBottomRef.current = false;
+    setAtBottom(false);
+    scrollDirectionRef.current = 0;
+    navigationReaderLockRef.current = "";
+    pendingReadingRestoreRef.current = undefined;
+    const element = target.closest("button, [role='button'], a, input, select, textarea") ?? target;
+    interactionAnchorRef.current = {
+      element, top: element.getBoundingClientRect().top - node.getBoundingClientRect().top
+    };
+    scrollTopRef.current = node.scrollTop;
+    captureReadingPosition(true);
   }, [captureReadingPosition]);
+  const restoreInteractionAnchor = useCallback(() => {
+    const anchor = interactionAnchorRef.current;
+    const node = transcriptRef.current;
+    if (!anchor || !node) return false;
+    if (!transcriptContentRef.current?.contains(anchor.element)) {
+      interactionAnchorRef.current = undefined;
+      return false;
+    }
+    node.scrollTop += anchor.element.getBoundingClientRect().top -
+      node.getBoundingClientRect().top - anchor.top;
+    scrollTopRef.current = node.scrollTop;
+    return true;
+  }, []);
+  const loadTranscriptHistory = useCallback(async () => {
+    if (historyLoadRef.current || !snapshot.historyMoreBefore ||
+        !snapshot.selectedSessionID || snapshot.hydratingSessionID) return 0;
+    const request = {};
+    historyLoadRef.current = request;
+    const anchor = pendingReadingRestoreRef.current ?? captureReadingPosition(true);
+    const endID = anchor?.windowEndID ?? transcriptWindowEndID ?? visibleEntries.at(-1)?.id;
+    if (anchor) {
+      const saved = {...anchor, windowEndID: endID};
+      pendingReadingRestoreRef.current = saved;
+      readingPositionsRef.current.set(snapshot.selectedSessionID, saved);
+    }
+    setTranscriptWindowEndID(endID);
+    setHistoryError("");
+    setHistoryLoading(true);
+    try {
+      return await client.loadEarlierHistory();
+    } catch (error) {
+      if (historyLoadRef.current === request) {
+        setHistoryError(error instanceof Error ? error.message : String(error));
+      }
+      return 0;
+    } finally {
+      if (historyLoadRef.current === request) {
+        historyLoadRef.current = undefined;
+        setHistoryLoading(false);
+      }
+    }
+  }, [client, snapshot.historyMoreBefore, snapshot.selectedSessionID,
+    snapshot.hydratingSessionID, transcriptWindowEndID, visibleEntries, captureReadingPosition]);
+
+  readAndAdvanceRef.current = () => {
+    if (!pendingReadingRestoreRef.current) captureReadingPosition();
+    const node = transcriptRef.current;
+    if (!node || node.clientHeight === 0 || activeView !== "chat" ||
+        !selected || snapshot.hydratingSessionID || document.visibilityState === "hidden" ||
+        navigationTarget || conversationNavigatorOpen || historyLoadRef.current) return;
+    if (pendingReadingRestoreRef.current) {
+      if (windowEndIndex < 0 && snapshot.historyMoreBefore && !historyError) void loadTranscriptHistory();
+      return;
+    }
+    const direction = scrollDirectionRef.current;
+    const shortContent = node.scrollHeight <= node.clientHeight;
+    const earlier = node.scrollTop <= node.clientHeight && (direction < 0 || shortContent);
+    const later = direction > 0 && transcriptEnd < entries.length &&
+      node.scrollHeight - node.scrollTop - node.clientHeight <= node.clientHeight;
+    if (!earlier && !later) return;
+    if (earlier && transcriptStart === 0) {
+      if (snapshot.historyMoreBefore && !historyError) void loadTranscriptHistory();
+      return;
+    }
+    const visible = visibleTranscriptAnchors(node);
+    const first = entries.findIndex((entry) => entry.id === visible[0]?.dataset.entryId);
+    const last = entries.findIndex((entry) => entry.id === visible.at(-1)?.dataset.entryId);
+    // Keep all currently visible entries inside the bounded, overlapping window.
+    const nextEnd = earlier
+      ? Math.max(transcriptEnd - transcriptPageStep, last >= 0 ? last + 1 : transcriptStart + 1)
+      : Math.min(entries.length, transcriptEnd + transcriptPageStep,
+        (first >= 0 ? first : transcriptEnd - transcriptPageOverlap) + transcriptPageSize);
+    if (nextEnd === transcriptEnd || nextEnd <= 0) return;
+    const endID = entries[nextEnd - 1]?.id;
+    const anchor = captureReadingPosition(true);
+    if (anchor) {
+      const saved = {...anchor, windowEndID: endID, atBottom: false};
+      pendingReadingRestoreRef.current = saved;
+      readingPositionsRef.current.set(snapshot.selectedSessionID, saved);
+    }
+    atBottomRef.current = false;
+    setAtBottom(false);
+    setTranscriptWindowEndID(endID);
+  };
+
+  useEffect(() => {
+    if (activeView !== "chat" || !selected || snapshot.hydratingSessionID) return;
+    scheduleReadingPositionCapture();
+    const node = transcriptRef.current;
+    if (!node || typeof IntersectionObserver === "undefined") return;
+    const observer = new IntersectionObserver(scheduleReadingPositionCapture, {root: node});
+    if (historyTopRef.current) observer.observe(historyTopRef.current);
+    if (historyBottomRef.current) observer.observe(historyBottomRef.current);
+    return () => observer.disconnect();
+  }, [activeView, snapshot.selectedSessionID, snapshot.hydratingSessionID,
+    transcriptStart, transcriptEnd, snapshot.historyMoreBefore, historyLoading,
+    scheduleReadingPositionCapture]);
+
   const switchConversationView = useCallback(
     (view: "chat" | "trajectory") => {
       if (view === activeView) return;
       if (activeView === "chat") captureReadingPosition(true);
+      interactionAnchorRef.current = undefined;
       if (view === "chat") {
         pendingReadingRestoreRef.current = readingPositionsRef.current.get(
           snapshot.selectedSessionID
@@ -495,7 +659,10 @@ export function App({client}: Props) {
         path: item.path
       });
       setConversationNavigatorOpen(false);
-      setTranscriptPage(page);
+      pendingReadingRestoreRef.current = undefined;
+      interactionAnchorRef.current = undefined;
+      scrollDirectionRef.current = 0;
+      setTranscriptWindowEndID(entries[entries.length - page * transcriptPageStep - 1]?.id);
       setActiveView("chat");
       setNavigationHighlightID(item.entryID);
       setReaderEntryID(item.entryID);
@@ -512,8 +679,10 @@ export function App({client}: Props) {
     [jumpToNavigationItem]
   );
   const openChatFromTrajectory = useCallback(
-    (turnID: string, callID?: string) => {
+    (turnID: string, callID?: string, entryID?: string) => {
       const item = conversationNavigation.find(
+        (candidate) => candidate.entryID === entryID && candidate.turnID === turnID
+      ) ?? conversationNavigation.find(
         (candidate) =>
           candidate.kind === "tool" &&
           candidate.turnID === turnID &&
@@ -532,7 +701,7 @@ export function App({client}: Props) {
     (target: BackgroundActivityTarget) => {
       window.focus();
       setActivityTarget(target);
-      setTranscriptPage(0);
+      setTranscriptWindowEndID(undefined);
       setActiveView("chat");
       setConversationNavigatorOpen(false);
       void client.selectSession(target.sessionID).catch((error) => {
@@ -722,8 +891,15 @@ export function App({client}: Props) {
 
   useLayoutEffect(() => {
     const saved = readingPositionsRef.current.get(snapshot.selectedSessionID);
+    interactionAnchorRef.current = undefined;
     pendingReadingRestoreRef.current = saved;
-    setTranscriptPage(saved?.page ?? 0);
+    setTranscriptWindowEndID(saved?.windowEndID);
+    historyLoadRef.current = undefined;
+    setHistoryLoading(false);
+    setHistoryError("");
+    scrollDirectionRef.current = 0;
+    scrollTopRef.current = 0;
+    setNavigationTarget(undefined);
     setActiveView("chat");
     setInspectCallID("");
     setConversationNavigatorOpen(false);
@@ -788,6 +964,7 @@ export function App({client}: Props) {
     if (!node || activeView !== "chat") return;
     const navigation = navigationTarget;
     if (navigation) {
+      interactionAnchorRef.current = undefined;
       const anchor = transcriptAnchor(node, navigation.entryID);
       if (!anchor) return;
       setNavigationTarget(undefined);
@@ -795,6 +972,7 @@ export function App({client}: Props) {
         ? fileTarget(anchor, navigation.path) ?? anchorContent(anchor)
         : anchorContent(anchor);
       centerTranscriptTarget(node, target);
+      scrollTopRef.current = node.scrollTop;
       atBottomRef.current = false;
       setAtBottom(false);
       setReaderEntryID(navigation.entryID);
@@ -814,23 +992,37 @@ export function App({client}: Props) {
       );
       return;
     }
-    const saved = pendingReadingRestoreRef.current;
-    if (saved && saved.page === transcriptPage) {
+    if (restoreInteractionAnchor()) return;
+    const saved = pendingReadingRestoreRef.current ??
+      (!atBottomRef.current ? readingPositionsRef.current.get(snapshot.selectedSessionID) : undefined);
+    if (saved && saved.windowEndID === transcriptWindowEndID &&
+        transcriptAnchor(node, saved.entryID)) {
       pendingReadingRestoreRef.current = undefined;
       restoreTranscriptPosition(node, saved);
+      scrollTopRef.current = node.scrollTop;
       atBottomRef.current = saved.atBottom;
       setAtBottom(saved.atBottom);
       setReaderEntryID(saved.entryID);
       return;
     }
-    if (atBottomRef.current && transcriptPage === 0) {
+    if (!snapshot.hydratingSessionID && !snapshot.historyMoreBefore &&
+        windowEndIndex < 0) pendingReadingRestoreRef.current = undefined;
+    if (atBottomRef.current && transcriptEnd === entries.length) {
       node.scrollTop = node.scrollHeight;
+      scrollTopRef.current = node.scrollTop;
     }
   }, [
     activeView,
     navigationTarget,
     snapshot.conversation.revision,
-    transcriptPage
+    snapshot.hydratingSessionID,
+    snapshot.historyMoreBefore,
+    transcriptWindowEndID,
+    transcriptEnd,
+    entries.length,
+    historyLoading,
+    historyError,
+    restoreInteractionAnchor
   ]);
 
   useEffect(() => {
@@ -845,18 +1037,28 @@ export function App({client}: Props) {
     const observer = new ResizeObserver(() => {
       const node = transcriptRef.current;
       if (!node) return;
-      if (atBottomRef.current && transcriptPage === 0) {
+      if (restoreInteractionAnchor()) {
+        scheduleReadingPositionCapture();
+        return;
+      }
+      if (atBottomRef.current && transcriptEnd === entries.length) {
         node.scrollTop = node.scrollHeight;
+        scrollTopRef.current = node.scrollTop;
+        scheduleReadingPositionCapture();
         return;
       }
       const saved = readingPositionsRef.current.get(snapshot.selectedSessionID);
-      if (saved?.page === transcriptPage) {
+      if (saved && saved.windowEndID === transcriptWindowEndID &&
+          transcriptAnchor(node, saved.entryID)) {
         restoreTranscriptPosition(node, saved);
+        scrollTopRef.current = node.scrollTop;
       }
+      scheduleReadingPositionCapture();
     });
     observer.observe(content);
     return () => observer.disconnect();
-  }, [activeView, snapshot.selectedSessionID, transcriptPage]);
+  }, [activeView, snapshot.selectedSessionID, transcriptWindowEndID,
+    transcriptEnd, entries.length, scheduleReadingPositionCapture, restoreInteractionAnchor]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -898,6 +1100,7 @@ export function App({client}: Props) {
   ]);
 
   useEffect(() => () => {
+    historyLoadRef.current = undefined;
     if (readerFrameRef.current !== undefined) {
       window.cancelAnimationFrame(readerFrameRef.current);
     }
@@ -981,20 +1184,31 @@ export function App({client}: Props) {
     }
   };
 
-  const createSession = async (profilePatch?: Record<string, unknown>) => {
+  const createSession = async (
+    workspaceID = selectedWorkspace?.id,
+    profilePatch?: Record<string, unknown>
+  ) => {
     if (creatingSession) return;
-    if (!selectedWorkspace) {
+    const workspace = snapshot.workspaces.find(
+      (item) => item.id === workspaceID && item.ready
+    );
+    if (!workspace) {
       setWorkspaceDialogOpen(true);
       return;
     }
     setCreatingSession(true);
+    setCreatingWorkspaceID(workspace.id);
     setLocalError("");
     try {
+      if (workspace.id !== snapshot.selectedWorkspaceID) {
+        await client.selectWorkspace(workspace.id);
+      }
       await client.createSession(newIsolation, profilePatch);
     } catch (error) {
       reportLocalError(error);
     } finally {
       setCreatingSession(false);
+      setCreatingWorkspaceID("");
     }
   };
 
@@ -1009,23 +1223,6 @@ export function App({client}: Props) {
       reportLocalError(error);
     } finally {
       setWorkspaceRemoving(false);
-    }
-  };
-
-  const exportSession = async () => {
-    try {
-      const value = await client.exportSession();
-      const blob = new Blob([`${JSON.stringify(value, null, 2)}\n`], {
-        type: "application/json"
-      });
-      const url = URL.createObjectURL(blob);
-      const anchor = document.createElement("a");
-      anchor.href = url;
-      anchor.download = `${safeFilename(value.session.title)}.qcode.json`;
-      anchor.click();
-      URL.revokeObjectURL(url);
-    } catch (error) {
-      reportLocalError(error);
     }
   };
 
@@ -1059,13 +1256,6 @@ export function App({client}: Props) {
           reportLocalError(error);
         }
       }
-    },
-    {
-      id: "export",
-      label: "export",
-      description: "Download this Session log as JSON",
-      icon: Download,
-      run: exportSession
     },
     {
       id: "plan",
@@ -1171,7 +1361,9 @@ export function App({client}: Props) {
   return (
     <div
       className="app"
-      data-rail-collapsed={railCollapsed || undefined}
+      data-rail-collapsed={!compactViewport && railCollapsed || undefined}
+      data-mobile-rail={mobileRailOpen || undefined}
+      data-motion={motionEnabled ? undefined : "none"}
       style={{
         "--ch-rail-width": `${railWidth}px`
       } as React.CSSProperties}
@@ -1183,13 +1375,20 @@ export function App({client}: Props) {
           onOpen={openBackgroundActivity}
         />
       </Suspense>
-      <aside className="sessionRail" aria-label="Sessions">
+      <Presence open={compactViewport && mobileRailOpen} kind="fade" backdrop>
+        <button className="railBackdrop" data-modal-backdrop data-motion-backdrop aria-label="Close session drawer"
+          tabIndex={-1} onClick={() => setMobileRailOpen(false)} />
+      </Presence>
+      <aside ref={railRef} id="session-rail" className="sessionRail" aria-label="Sessions"
+        {...(compactViewport && !mobileRailOpen ? {inert: "", "aria-hidden": true} : {})}
+        role={compactViewport && mobileRailOpen ? "dialog" : undefined}
+        aria-modal={compactViewport && mobileRailOpen || undefined}>
         <div className="brandRow">
           <button
             className="railToggle"
             aria-label={railCollapsed ? "Expand sidebar" : "Collapse sidebar"}
             title={railCollapsed ? "Expand sidebar" : "Collapse sidebar"}
-            onClick={() => setRailCollapsed((value) => !value)}
+            onClick={() => compactViewport ? setMobileRailOpen(false) : setRailCollapsed((value) => !value)}
           >
             <span className="railLogo"><CapybaraMark /></span>
             <span className="railToggleIcon">
@@ -1200,46 +1399,21 @@ export function App({client}: Props) {
           </button>
           <span className="brandName">QCode</span>
         </div>
-        <div className="newSessionRow">
-          <button
-            className="newSessionButton"
-            aria-label={selectedWorkspace ? "New chat" : "Select workspace"}
-            disabled={creatingSession}
-            onClick={() => selectedWorkspace
-              ? void createSession()
-              : setWorkspaceDialogOpen(true)}
-          >
-            {creatingSession
-              ? <LoaderCircle className="spin" size={16} />
-              : selectedWorkspace
-                ? <Plus size={16} />
-                : <FolderOpen size={16} />}
-            <span>{selectedWorkspace ? "New session" : "Select workspace"}</span>
-          </button>
-        </div>
         <div className="sessionSectionHeader">
-            <span className="sessionSectionTitle">Workspaces</span>
+          <span className="sessionSectionTitle">Workspaces</span>
           <div className="sessionSectionActions">
-            <select
-              className="newSessionIsolation"
-              aria-label="New session isolation"
-              value={newIsolation}
-              onChange={(event) => setNewIsolation(
-                event.target.value as "shared" | "worktree"
-              )}
+            <button
+              type="button"
+              className="addWorkspaceButton"
+              onClick={() => setWorkspaceDialogOpen(true)}
             >
-              <option value="shared">Shared</option>
-              <option value="worktree">Worktree</option>
-            </select>
+              <FolderPlus size={14} />
+              <span>Add workspace</span>
+            </button>
             <IconButton
               label="Search sessions"
               icon={<Search size={15} />}
               onClick={() => setSessionSearchOpen((value) => !value)}
-            />
-            <IconButton
-                label="Add workspace"
-                icon={<FolderPlus size={15} />}
-                onClick={() => setWorkspaceDialogOpen(true)}
             />
           </div>
         </div>
@@ -1340,31 +1514,17 @@ export function App({client}: Props) {
                         </small>
                       )}
                     </button>
-                    {workspace.git?.repository && (
-                      <label className="workspaceBranch">
-                        <GitFork size={12} aria-hidden="true" />
-                        <select
-                          aria-label={`Branch for ${workspace.label}`}
-                          value={workspace.git.branch}
-                          onChange={(event) => void client.switchWorkspaceBranch(
-                            workspace.id,
-                            event.target.value
-                          ).catch(reportLocalError)}
-                        >
-                          {workspace.git.detached && workspace.git.branch && (
-                            <option value={workspace.git.branch}>
-                              {workspace.git.branch} (detached)
-                            </option>
-                          )}
-                          {(workspace.git.branches ?? []).map((branch) => (
-                            <option value={branch} key={branch}>
-                              {branch}{branch === workspace.git?.branch &&
-                                workspace.git.dirty ? " *" : ""}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                    )}
+                    <span className="workspaceCreateAction">
+                      <IconButton
+                        label={`New session in ${workspace.label}`}
+                        icon={creatingSession &&
+                          workspace.id === creatingWorkspaceID
+                          ? <LoaderCircle className="spin" size={14} />
+                          : <MessageSquarePlus size={15} />}
+                        disabled={!workspace.ready || creatingSession}
+                        onClick={() => void createSession(workspace.id)}
+                      />
+                    </span>
                     <WorkspaceRemovalButton
                       id={workspace.id}
                       label={workspace.label}
@@ -1381,6 +1541,7 @@ export function App({client}: Props) {
                           active={session.session_id === snapshot.selectedSessionID}
                           onClick={() => {
                             captureReadingPosition(true);
+                            setMobileRailOpen(false);
                             setLocalError("");
                             void client.selectSession(session.session_id)
                               .catch(reportLocalError);
@@ -1390,7 +1551,8 @@ export function App({client}: Props) {
                               "Rename session",
                               session.title
                             )?.trim();
-                            if (title && title !== session.title) {
+                            if (title && (title !== session.title ||
+                              (session.title_source && session.title_source !== "manual"))) {
                               void runSessionAction(session, () => client.updateSession(
                                 session.session_id, session.revision, {title}
                               ));
@@ -1475,8 +1637,12 @@ export function App({client}: Props) {
       <main className="conversation" data-empty={blankSession || undefined}>
         <header
           className="conversationHeader"
-          data-hidden={blankSession || undefined}
         >
+          <div className="mobileRailToggle">
+            <IconButton label="Open session drawer" icon={<Menu size={18} />}
+              expanded={mobileRailOpen} controls="session-rail"
+              onClick={() => setMobileRailOpen(true)} />
+          </div>
           <div className="conversationIdentity">
             <div>
               <h1>{selected?.title ?? "New Chat"}</h1>
@@ -1547,15 +1713,19 @@ export function App({client}: Props) {
                 />
               </div>
             )}
-            {selected && (
-              <>
+            {selectedWorkspace && (
                 <IconButton
-                  label="Export session"
-                  disabled={Boolean(snapshot.hydratingSessionID)}
-                  icon={<Download size={17} />}
-                  onClick={() => void exportSession()}
+                  label="Git tools"
+                  icon={<GitBranch size={17} />}
+                  expanded={gitOpen && activeView === "chat"}
+                  controls="git-tools"
+                  onClick={() => {
+                    if (activeView === "trajectory") {
+                      switchConversationView("chat");
+                      setGitOpen(true);
+                    } else setGitOpen((value) => !value);
+                  }}
                 />
-              </>
             )}
           </div>
         </header>
@@ -1564,18 +1734,35 @@ export function App({client}: Props) {
           className="conversationScrollport"
           ref={transcriptRef}
           data-conversation-scroll
+          aria-busy={Boolean(snapshot.hydratingSessionID)}
           data-view={activeView}
           onScroll={(event) => {
             const node = event.currentTarget;
-            const next = node.scrollHeight - node.scrollTop - node.clientHeight <=
+            if (activeView !== "chat") return;
+            const delta = node.scrollTop - scrollTopRef.current;
+            scrollTopRef.current = node.scrollTop;
+            // Layout/resize restoration already records its final scrollTop.
+            // A delayed event from that write must not change the user's intent
+            // using a newer scrollHeight or trigger another history window shift.
+            if (delta === 0) return;
+            interactionAnchorRef.current = undefined;
+            scrollDirectionRef.current = delta < 0 ? -1 : 1;
+            const next = transcriptEnd === entries.length &&
+              node.scrollHeight - node.scrollTop - node.clientHeight <=
               experience.scrolling.followThreshold;
             atBottomRef.current = next;
             setAtBottom(next);
+            if (!next && !transcriptWindowEndID) {
+              setTranscriptWindowEndID(visibleEntries.at(-1)?.id);
+            }
+            if (delta !== 0 && historyLoadRef.current) {
+              pendingReadingRestoreRef.current = captureReadingPosition(true);
+            }
             scheduleReadingPositionCapture();
           }}
         >
           {activeView === "trajectory" && selected ? (
-            <Suspense fallback={<div className="trajectoryLoading">Loading trajectory...</div>}>
+            <Suspense fallback={<Skeleton label="Loading trajectory" />}>
               <Trajectory
                 events={snapshot.events}
                 trace={snapshot.trace}
@@ -1589,7 +1776,23 @@ export function App({client}: Props) {
                 onOpenChat={openChatFromTrajectory}
               />
             </Suspense>
-          ) : <div className="transcript" ref={transcriptContentRef} aria-live="polite">
+          ) : <div
+            className="transcript"
+            ref={transcriptContentRef}
+            aria-live="polite"
+            onPointerDownCapture={(event) => prepareTranscriptInteraction(event.target)}
+            onFocusCapture={(event) => {
+              if (!navigationTarget && !navigationReaderLockRef.current) {
+                prepareTranscriptInteraction(event.target);
+              }
+            }}
+            onKeyDownCapture={(event) => {
+              if (event.key === "Enter" || event.key === " ") {
+                prepareTranscriptInteraction(event.target);
+              }
+            }}
+            onClickCapture={(event) => prepareTranscriptInteraction(event.target)}
+          >
             {snapshot.problem && (
               <div className="inlineProblem">
                 <AlertTriangle size={17} />
@@ -1604,11 +1807,7 @@ export function App({client}: Props) {
             {localError && (
               <div className="inlineProblem" role="alert">
                 <AlertTriangle size={17} />
-                <span>
-                  {localError.includes("would be overwritten by checkout")
-                    ? "Branch not switched. Commit or stash local changes first."
-                    : localError}
-                </span>
+                <span>{localError}</span>
                 <IconButton
                   label="Dismiss error"
                   icon={<X size={14} />}
@@ -1616,39 +1815,30 @@ export function App({client}: Props) {
                 />
               </div>
             )}
-            {(transcriptStart > 0 || snapshot.historyMoreBefore || transcriptPage > 0) && (
-              <div className="transcriptPagination" aria-label="Transcript pagination">
-                {(transcriptStart > 0 || snapshot.historyMoreBefore) && (
-                  <button
-                    onClick={() => {
-                      const anchor = captureReadingPosition(true);
-                      pendingReadingRestoreRef.current = anchor;
-                      if (transcriptStart > 0) {
-                        setTranscriptPage((page) => page + 1);
-                        return;
-                      }
-                      void client.loadEarlierHistory().then((loaded) => {
-                        if (loaded > 0) setTranscriptPage((page) => page + 1);
-                      }).catch(reportLocalError);
-                    }}
-                  >
-                    Earlier messages
-                  </button>
-                )}
-                {transcriptPage > 0 && (
-                  <button onClick={() => setTranscriptPage((page) => page - 1)}>
-                    Newer messages
-                  </button>
-                )}
+            {(transcriptStart > 0 || snapshot.historyMoreBefore) && (
+              <div ref={historyTopRef} className="transcriptBoundary" data-history-edge="earlier" aria-hidden="true" />
+            )}
+            {historyLoading && (
+              <div className="transcriptHistoryStatus" role="status" aria-label="Loading earlier messages">
+                <LoaderCircle className="spin" size={16} aria-hidden="true" />
+              </div>
+            )}
+            {historyError && (
+              <div className="transcriptHistoryStatus" role="alert">
+                <span>{historyError}</span>
+                <IconButton label="Retry loading history" icon={<RefreshCw size={16} />}
+                  onClick={() => void loadTranscriptHistory()} />
               </div>
             )}
             {!selected ? (
               <EmptySessionSetup
                 creating={creatingSession}
                 workspaceReady={Boolean(selectedWorkspace)}
-                onCreate={() => void createSession()}
+                onCreate={() => void createSession(selectedWorkspace?.id)}
                 onChooseWorkspace={() => setWorkspaceDialogOpen(true)}
               />
+            ) : entries.length === 0 && snapshot.hydratingSessionID ? (
+              <Skeleton label="Loading conversation" />
             ) : entries.length === 0 ? (
               <div className="emptyConversation">
                 <QCodeWordmark hero />
@@ -1664,7 +1854,6 @@ export function App({client}: Props) {
                   client={client}
                   onError={reportLocalError}
                   onInspect={inspectTool}
-                  canOpenPath={snapshot.canOpenPath}
                   checkpoints={snapshot.checkpoints}
                   recoveryTurnID={resumableTurnID}
                   chrome={turnChrome.get(turn.turnID)}
@@ -1674,18 +1863,32 @@ export function App({client}: Props) {
                 />
               ))
             )}
-            {activeTurn && <TurnStatus events={snapshot.events} turnID={activeTurn} />}
+            {transcriptEnd < entries.length && (
+              <div ref={historyBottomRef} className="transcriptBoundary" data-history-edge="newer" aria-hidden="true" />
+            )}
+            {activeTurn && transcriptEnd === entries.length &&
+              <TurnStatus events={presentationEvents} turnID={activeTurn}
+                status={snapshot.conversation.activeStatus} />}
           </div>}
 
-          {activeView === "chat" && selected && !atBottom && entries.length > 0 && (
-            <div className="backToBottom">
+          {selected && <div className="composerSeat" data-composer-seat>
+          <Presence open={activeView === "chat" && !atBottom && entries.length > 0} kind="fade">
+            <div className="backToBottom" data-motion-surface>
               <IconButton
                 label="Back to bottom"
                 icon={<ArrowDown size={17} />}
                 onClick={() => {
                   const node = transcriptRef.current;
                   if (!node) return;
-                  node.scrollTo({top: node.scrollHeight, behavior: "smooth"});
+                  pendingReadingRestoreRef.current = undefined;
+                  interactionAnchorRef.current = undefined;
+                  scrollDirectionRef.current = 0;
+                  setTranscriptWindowEndID(undefined);
+                  setNavigationTarget(undefined);
+                  navigationReaderLockRef.current = "";
+                  if (transcriptEnd === entries.length) {
+                    node.scrollTo({top: node.scrollHeight, behavior: motionEnabled ? "smooth" : "auto"});
+                  }
                   atBottomRef.current = true;
                   setAtBottom(true);
                   readingPositionsRef.current.delete(snapshot.selectedSessionID);
@@ -1697,9 +1900,8 @@ export function App({client}: Props) {
                 }}
               />
             </div>
-          )}
+          </Presence>
 
-          {selected && <div className="composerSeat" data-composer-seat>
             {visibleContextResources.length > 0 && (
               <div className="contextTray" aria-label="Prompt context">
                 {visibleContextResources.map((resource) => (
@@ -1965,7 +2167,6 @@ export function App({client}: Props) {
                           setCommandQuery("");
                           if (commandMenuSource === "slash") {
                             setDraft("");
-                            requestAnimationFrame(() => textareaRef.current?.focus());
                           }
                           setCommandMenuSource("button");
                         }}
@@ -2055,7 +2256,24 @@ export function App({client}: Props) {
         </div>
       </main>
 
-      {conversationNavigatorOpen && (
+      <Presence open={gitOpen && activeView === "chat" && Boolean(selectedWorkspace)} kind="dialog">
+        {selectedWorkspace && <Suspense fallback={null}>
+          <GitTools
+            key={`${selectedWorkspace.id}:${selected?.session_id ?? ""}`}
+            client={client}
+            workspace={selectedWorkspace}
+            session={selected}
+            busy={gitWorkspaceBusy}
+            mutationDisabled={gitMutationDisabled}
+            modal={compactViewport}
+            onClose={() => {
+              restoreGitFocus.current = true;
+              setGitOpen(false);
+            }}
+          />
+        </Suspense>}
+      </Presence>
+      <Presence open={conversationNavigatorOpen} kind="dialog">
         <Suspense fallback={null}>
           <ConversationNavigator
             items={conversationNavigation}
@@ -2069,8 +2287,8 @@ export function App({client}: Props) {
             }}
           />
         </Suspense>
-      )}
-      {contextOpen && (
+      </Presence>
+      <Presence open={contextOpen} kind="dialog">
         <Suspense fallback={null}>
           <WorkspaceContextDialog
             snapshot={snapshot}
@@ -2079,8 +2297,8 @@ export function App({client}: Props) {
             onError={reportLocalError}
           />
         </Suspense>
-      )}
-      {workspaceDialogOpen && (
+      </Presence>
+      <Presence open={workspaceDialogOpen} kind="dialog">
         <WorkspaceDialog
           snapshot={snapshot}
           client={client}
@@ -2088,7 +2306,8 @@ export function App({client}: Props) {
           onClose={() => setWorkspaceDialogOpen(false)}
           onError={reportLocalError}
         />
-      )}
+      </Presence>
+      <Presence open={Boolean(workspaceRemoval)} kind="dialog">
       {workspaceRemoval && (
         <WorkspaceRemovalDialog
           label={workspaceRemoval.label}
@@ -2097,7 +2316,8 @@ export function App({client}: Props) {
           onConfirm={() => void removeWorkspace(workspaceRemoval.id)}
         />
       )}
-      {settingsOpen && (
+      </Presence>
+      <Presence open={settingsOpen} kind="dialog">
         <Suspense fallback={null}>
           <SettingsDialog
             snapshot={snapshot}
@@ -2112,7 +2332,7 @@ export function App({client}: Props) {
             onError={reportLocalError}
           />
         </Suspense>
-      )}
+      </Presence>
     </div>
   );
 
@@ -2120,7 +2340,7 @@ export function App({client}: Props) {
 
 function readTranscriptPosition(
   scrollport: HTMLElement,
-  page: number,
+  windowEndID: string | undefined,
   atBottom: boolean
 ): TranscriptReadingPosition | undefined {
   const anchors = Array.from(
@@ -2128,12 +2348,7 @@ function readTranscriptPosition(
   );
   if (anchors.length === 0) return undefined;
   const viewport = scrollport.getBoundingClientRect();
-  const composer = scrollport.querySelector<HTMLElement>("[data-composer-seat]");
-  const visibleBottom = composer?.getBoundingClientRect().top ?? viewport.bottom;
-  const visible = anchors.filter((anchor) => {
-    const box = anchorContent(anchor).getBoundingClientRect();
-    return box.bottom > viewport.top && box.top < visibleBottom;
-  });
+  const visible = visibleTranscriptAnchors(scrollport);
   const anchor = (atBottom ? visible.at(-1) : visible[0]) ??
     (atBottom ? anchors.at(-1) : anchors[0]);
   const entryID = anchor?.dataset.entryId;
@@ -2142,9 +2357,20 @@ function readTranscriptPosition(
     entryID,
     top: anchorContent(anchor).getBoundingClientRect().top - viewport.top,
     scrollTop: scrollport.scrollTop,
-    page,
+    windowEndID,
     atBottom
   };
+}
+
+function visibleTranscriptAnchors(scrollport: HTMLElement): HTMLElement[] {
+  const viewport = scrollport.getBoundingClientRect();
+  const composer = scrollport.querySelector<HTMLElement>("[data-composer-seat]");
+  const visibleBottom = Math.min(viewport.bottom, composer?.getBoundingClientRect().top ?? viewport.bottom);
+  return Array.from(scrollport.querySelectorAll<HTMLElement>("[data-entry-id]"))
+    .filter((anchor) => {
+      const box = anchorContent(anchor).getBoundingClientRect();
+      return box.height > 0 && box.bottom > viewport.top && box.top < visibleBottom;
+    });
 }
 
 function transcriptAnchor(
@@ -2254,6 +2480,7 @@ function SessionRow({
   actionError: string;
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
+  const actionsRef = useRef<HTMLDivElement>(null);
   const showStatus = session.status !== "idle";
   const statusTone = session.status === "failed"
     ? "error"
@@ -2289,6 +2516,7 @@ function SessionRow({
           : AlertTriangle;
   const run = (action: () => void) => {
     setMenuOpen(false);
+    actionsRef.current?.querySelector("button")?.focus();
     action();
   };
   return (
@@ -2302,13 +2530,18 @@ function SessionRow({
       aria-selected={active}
       onMouseLeave={() => setMenuOpen(false)}
       onKeyDown={(event) => {
-        if (event.key === "Escape") setMenuOpen(false);
+        if (event.key === "Escape") {
+          event.stopPropagation();
+          setMenuOpen(false);
+          actionsRef.current?.querySelector("button")?.focus();
+        }
       }}
     >
       <button className="sessionSelect" onClick={onClick}>
         <span className="sessionStatusSlot">
           {showStatus && (
             <span
+              key={session.status}
               className="sessionStatusMark"
               data-tone={statusTone}
               title={statusLabel}
@@ -2325,17 +2558,18 @@ function SessionRow({
         <span className="sessionTitle">{session.title}</span>
         <span className="sessionAge">{relativeTime(session.updated_at)}</span>
       </button>
-      <div className="sessionActions">
+      <div className="sessionActions" ref={actionsRef}>
         <IconButton
           label={`Session actions for ${session.title}`}
           icon={actionPending
             ? <LoaderCircle className="spin" size={14} />
             : <MoreHorizontal size={15} />}
           disabled={actionPending}
+          expanded={menuOpen}
           onClick={() => setMenuOpen((value) => !value)}
         />
-        {menuOpen && (
-          <div className="sessionMenu" role="menu">
+        <Presence open={menuOpen}>
+          <div className="sessionMenu" data-motion-surface role="menu">
             <button role="menuitem" onClick={() => run(onRename)}>
               <Pencil size={14} /> Rename
             </button>
@@ -2355,7 +2589,7 @@ function SessionRow({
               <Trash2 size={14} /> Delete
             </button>
           </div>
-        )}
+        </Presence>
       </div>
       {actionError && (
         <span className="sessionActionError" role="alert">
@@ -2401,14 +2635,11 @@ interface TranscriptTurn {
 function groupTranscriptTurns(
   entries: readonly ConversationNode[]
 ): readonly TranscriptTurn[] {
-  const turns: TranscriptTurn[] = [];
+  const turns: Array<Omit<TranscriptTurn, "entries"> & {entries: ConversationNode[]}> = [];
   for (const entry of entries) {
     const previous = turns.at(-1);
     if (previous?.turnID === entry.turnID) {
-      turns[turns.length - 1] = {
-        ...previous,
-        entries: [...previous.entries, entry]
-      };
+      previous.entries.push(entry);
       continue;
     }
     turns.push({
@@ -2457,7 +2688,6 @@ function TurnTranscript({
   client,
   onError,
   onInspect,
-  canOpenPath,
   checkpoints,
   recoveryTurnID,
   chrome,
@@ -2471,7 +2701,6 @@ function TurnTranscript({
   client: RuntimeClient;
   onError: (error: unknown) => void;
   onInspect: (callID: string) => void;
-  canOpenPath: boolean;
   checkpoints: readonly SessionCheckpoint[];
   recoveryTurnID?: string;
   chrome?: MessageChrome;
@@ -2504,19 +2733,17 @@ function TurnTranscript({
       client={client}
       onError={onError}
       onInspect={onInspect}
-      canOpenPath={canOpenPath}
       checkpoint={checkpointForTurn(checkpoints, entry.turnID)}
       recoveryTurnID={recoveryTurnID}
       chrome={chrome}
       feedback={messageFeedback[`${selectedSessionID}:${entry.id}`]}
-      onFeedback={(rating) => client.toggleMessageFeedback(entry.id, rating)}
       navigationHighlightID={navigationHighlightID}
     />
   );
 
   return (
     <section className="turnTranscript" data-turn-id={entries[0]?.turnID}>
-      {visibleEntries.map(renderEntry)}
+      <ExecutionStages entries={visibleEntries} revealEntryID={revealEntryID} renderEntry={renderEntry} />
       {executionEntries.length > 0 && (
         <div
           className="turnExecution"
@@ -2532,11 +2759,11 @@ function TurnTranscript({
             <span>Execution details</span>
             <small>{executionEntries.length} steps</small>
           </button>
-          {executionOpen && (
+          <Collapse open={executionOpen}>
             <div className="turnExecutionItems">
-              {executionEntries.map(renderEntry)}
+              <ExecutionStages entries={executionEntries} revealEntryID={revealEntryID} renderEntry={renderEntry} />
             </div>
-          )}
+          </Collapse>
         </div>
       )}
     </section>
@@ -2548,24 +2775,20 @@ function TranscriptEntry({
   client,
   onError,
   onInspect,
-  canOpenPath,
   checkpoint,
   recoveryTurnID,
   chrome,
   feedback,
-  onFeedback,
   navigationHighlightID
 }: {
   entry: ConversationNode;
   client: RuntimeClient;
   onError: (error: unknown) => void;
   onInspect: (callID: string) => void;
-  canOpenPath: boolean;
   checkpoint?: SessionCheckpoint;
   recoveryTurnID?: string;
   chrome?: MessageChrome;
   feedback?: MessageFeedbackRating;
-  onFeedback: (rating: MessageFeedbackRating) => void;
   navigationHighlightID: string;
 }) {
   return (
@@ -2581,12 +2804,10 @@ function TranscriptEntry({
         client={client}
         onError={onError}
         onInspect={onInspect}
-        canOpenPath={canOpenPath}
         checkpoint={checkpoint}
         recoveryTurnID={recoveryTurnID}
         chrome={chrome}
         feedback={feedback}
-        onFeedback={onFeedback}
       />
     </div>
   );
@@ -2597,26 +2818,26 @@ const TranscriptItem = memo(function TranscriptItem({
   client,
   onError,
   onInspect,
-  canOpenPath,
   checkpoint,
   recoveryTurnID,
   chrome,
-  feedback,
-  onFeedback
+  feedback
 }: {
   entry: ConversationNode;
   client: RuntimeClient;
   onError: (error: unknown) => void;
   onInspect: (callID: string) => void;
-  canOpenPath: boolean;
   checkpoint?: SessionCheckpoint;
   recoveryTurnID?: string;
   chrome?: MessageChrome;
   feedback?: MessageFeedbackRating;
-  onFeedback: (rating: MessageFeedbackRating) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [recoveryPending, setRecoveryPending] = useState("");
+  const onFeedback = useCallback(
+    (rating: MessageFeedbackRating) => client.toggleMessageFeedback(entry.id, rating),
+    [client, entry.id]
+  );
   if (entry.kind === "user") {
     return (
       <div
@@ -2640,6 +2861,20 @@ const TranscriptItem = memo(function TranscriptItem({
       </div>
     );
   }
+  if (entry.kind === "commentary") {
+    return (
+      <article className="assistantMessage commentaryMessage">
+        <Suspense fallback={
+          <div className="assistantMarkdownFallback">{entry.text}</div>
+        }>
+          <MarkdownMessage
+            text={entry.text}
+            settled
+          />
+        </Suspense>
+      </article>
+    );
+  }
   if (entry.kind === "assistant") {
     return (
       <article
@@ -2653,8 +2888,6 @@ const TranscriptItem = memo(function TranscriptItem({
           <MarkdownMessage
             text={entry.text}
             settled={Boolean(chrome)}
-            canOpenPath={canOpenPath}
-            onOpenFile={(path) => void client.openWorkspacePath(path).catch(onError)}
           />
         </Suspense>
         {chrome && !entry.superseded && (
@@ -2751,21 +2984,8 @@ const TranscriptItem = memo(function TranscriptItem({
       </div>
     );
   }
-  if (entry.kind === "receipt") {
+  if (entry.kind === "receipt" || entry.kind === "deliverables") {
     return null;
-  }
-  if (entry.kind === "deliverables") {
-    return (
-      <Suspense fallback={null}>
-        <ProducedFiles
-          entry={entry}
-          client={client}
-          canOpenPath={canOpenPath}
-          onInspect={onInspect}
-          onError={onError}
-        />
-      </Suspense>
-    );
   }
   if (entry.kind === "context") {
     return (
@@ -2792,11 +3012,6 @@ const TranscriptItem = memo(function TranscriptItem({
     onAddContext={(callID, text) => {
       void client.addTerminalContext(callID, text).catch(onError);
     }}
-    {...(canOpenPath ? {
-      onOpenFile: (path: string) => {
-        void client.openWorkspacePath(path).catch(onError);
-      }
-    } : {})}
   />;
 });
 
@@ -2817,10 +3032,12 @@ function recoverySummary(sideEffects: string): string {
 
 function TurnStatus({
   events,
-  turnID
+  turnID,
+  status
 }: {
   events: readonly RuntimeEvent[];
   turnID: string;
+  status?: string;
 }) {
   const startedAt = useMemo(() => {
     const value = events.find(
@@ -2838,7 +3055,7 @@ function TurnStatus({
   }, [startedAt]);
   return (
     <div className="turnStatus" role="status" aria-live="polite">
-      <span>Deep diving...</span>
+      <span>{status ?? "Thinking..."}</span>
       {elapsed >= 15_000 && <small>{formatDuration(elapsed)}</small>}
     </div>
   );
@@ -3094,6 +3311,8 @@ function WorkspaceDialog({
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const dialogRef = useRef<HTMLElement>(null);
+  useModalFocus(dialogRef, true, onClose);
   const choose = async () => {
     if (busy) return;
     setBusy(true);
@@ -3114,11 +3333,14 @@ function WorkspaceDialog({
   return (
     <div
       className="contextDialogOverlay"
+      data-motion-backdrop
       onMouseDown={(event) => {
         if (event.target === event.currentTarget) onClose();
       }}
     >
       <section
+        ref={dialogRef}
+        data-motion-surface
         className="contextDialog workspaceDialog"
         role="dialog"
         aria-modal="true"
@@ -3203,9 +3425,13 @@ function WorkspaceRemovalDialog({
   onCancel: () => void;
   onConfirm: () => void;
 }) {
+  const dialogRef = useRef<HTMLElement>(null);
+  useModalFocus(dialogRef, true, () => { if (!busy) onCancel(); });
   return (
-    <div className="contextDialogOverlay">
+    <div className="contextDialogOverlay" data-motion-backdrop>
       <section
+        ref={dialogRef}
+        data-motion-surface
         className="contextDialog workspaceRemovalDialog"
         role="alertdialog"
         aria-modal="true"
@@ -3253,14 +3479,13 @@ function WorkspaceRemovalButton({
   disabled?: boolean;
   onRemove: (workspaceID: string) => void;
 }) {
+  if (!removable) return null;
   return (
     <IconButton
-      label={removable
-        ? `Remove ${label}`
-        : `Default workspace ${label} cannot be removed`}
+      label={`Remove ${label}`}
       icon={<Trash2 size={14} />}
-      danger={removable}
-      disabled={disabled || !removable}
+      danger
+      disabled={disabled}
       onClick={() => onRemove(id)}
     />
   );
@@ -3365,7 +3590,7 @@ function FirstRunSetup({
           <div className="emptyMark"><CapybaraMark size="hero" /></div>
           <div>
             <h1 id="startup-title">Set up QCode</h1>
-            <p>Connect a model provider for this workspace.</p>
+            <p>Model connection</p>
           </div>
         </div>
 
@@ -3523,7 +3748,7 @@ function FirstRunSetup({
         )}
 
         <div className="startupFooter">
-          <small title={workspaceRoot}>{workspaceRoot}</small>
+          {workspaceRoot && <small title={workspaceRoot}>{workspaceRoot}</small>}
           <button className="startupCreate" disabled={!ready || submitting}>
             {submitting
               ? <LoaderCircle className="spin" size={17} />
@@ -3864,39 +4089,6 @@ function clamp(value: number, minimum: number, maximum: number): number {
   return Math.min(maximum, Math.max(minimum, value));
 }
 
-function IconButton({
-  label,
-  icon,
-  onClick,
-  disabled,
-  primary,
-  danger,
-  expanded
-}: {
-  label: string;
-  icon: React.ReactNode;
-  onClick: () => void;
-  disabled?: boolean;
-  primary?: boolean;
-  danger?: boolean;
-  expanded?: boolean;
-}) {
-  return (
-    <button
-      className="iconButton"
-      data-primary={primary || undefined}
-      data-danger={danger || undefined}
-      aria-label={label}
-      aria-expanded={expanded}
-      title={label}
-      disabled={disabled}
-      onClick={onClick}
-    >
-      {icon}
-    </button>
-  );
-}
-
 function BootState({title, detail, failed}: {title: string; detail?: string; failed?: boolean}) {
   return (
     <main className="bootState" data-failed={failed || undefined}>
@@ -4068,9 +4260,4 @@ function applyThemeMode(theme: ThemeMode, systemDark: boolean) {
     : theme;
   document.documentElement.dataset.theme = resolved;
   document.documentElement.style.colorScheme = resolved;
-}
-
-function safeFilename(value: string): string {
-  const safe = value.trim().replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
-  return safe || "qcode-session";
 }

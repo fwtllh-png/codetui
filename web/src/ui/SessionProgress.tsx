@@ -25,9 +25,11 @@ export function SessionProgress({
   onOpenTrajectory: () => void;
 }) {
   const [planExpanded, setPlanExpanded] = useState(true);
+  const isDeliverable = plan?.purpose === "deliverable" ||
+    plan?.document?.purpose === "deliverable";
   const planSteps = plan?.document?.steps ?? [];
   const planDone = planSteps.filter((step) => step.status === "done").length;
-  const planActive = plan?.turn_id === activeTurnID ? planSteps.filter(
+  const planActive = !isDeliverable && plan?.turn_id === activeTurnID ? planSteps.filter(
     (step) => step.status === "in_progress"
   ).length : 0;
   const planPending = planSteps.length - planDone - planActive;
@@ -54,9 +56,11 @@ export function SessionProgress({
             >
               <span className="planSummary">
                 <ListChecks size={15} />
-                <strong>Tasks</strong>
+                <strong>{isDeliverable ? "Proposed plan" : "Tasks"}</strong>
                 <small>
-                  {planDone} completed · {planActive} active · {planPending} pending
+                  {isDeliverable
+                    ? `${planSteps.length} steps`
+                    : `${planDone} completed · ${planActive} active · ${planPending} pending`}
                 </small>
               </span>
               <ChevronDown size={15} data-expanded={planExpanded || undefined} />

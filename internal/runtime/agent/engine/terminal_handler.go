@@ -44,6 +44,17 @@ func (h *turnEmitter) setTerminalDecision(source func() (turnkernel.TerminalDeci
 
 func (h *turnEmitter) setPhase(source func() turnkernel.Phase) { h.phase = source }
 
+// Commentary is a durable projection, not a new execution phase. Publication
+// failure cannot change the work outcome; the terminal outbox retries it.
+func (h *turnEmitter) publishCommentary(message *protocol.CommentaryCompletedData) {
+	if message == nil {
+		return
+	}
+	if err := h.emitFunc(Event{Turn: h.turn, Commentary: message}); err != nil {
+		h.addSecondary("commentary_projection", err)
+	}
+}
+
 // checkStatePhase validates a host state against the authoritative kernel
 // phase using the phaseStates declaration. A mismatch is a projection
 // invariant violation, not a business failure: the event is still emitted and

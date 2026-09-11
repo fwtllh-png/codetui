@@ -46,11 +46,17 @@ interface Props {
   onInspectConsumed: () => void;
   onLoadEarlier: () => Promise<number>;
   onRetryTrace: () => Promise<void>;
-  onOpenChat: (turnID: string, callID?: string) => void;
+  onOpenChat: (turnID: string, callID?: string, entryID?: string) => void;
 }
 
 type TimeRange = {start: number; end: number};
 type Viewport = {start: number; end: number};
+
+const compactTokens = new Intl.NumberFormat("en", {
+  notation: "compact",
+  maximumFractionDigits: 1
+});
+const exactTokens = new Intl.NumberFormat("en", {maximumFractionDigits: 0});
 
 export function Trajectory({
   events,
@@ -126,6 +132,7 @@ export function Trajectory({
   return (
     <section className="trajectory" aria-label="Execution trajectory">
       <div className="trajectoryToolbar">
+        <div className="trajectoryModes" role="group" aria-label="Trajectory display">
         <button
           aria-pressed={duration}
           onClick={() => {
@@ -151,6 +158,8 @@ export function Trajectory({
         >
           <ListTree size={13} /> Calls
         </button>
+        </div>
+        <div className="trajectoryFilters">
         <label className="trajectorySearch">
           <Search size={13} />
           <span className="srOnly">Search trajectory</span>
@@ -162,10 +171,14 @@ export function Trajectory({
           />
         </label>
         {projection.prefixTokens !== undefined && (
-          <span className="ledgerDuration" aria-label="Prefix metrics">
-            Prefix {Math.round(projection.prefixTokens)} tok
-          </span>
+          <div className="trajectoryMetrics" aria-label="Prefix metrics"
+            title={`${exactTokens.format(projection.prefixTokens)} prefix tokens`}>
+            <span>Prefix</span>
+            <strong>{compactTokens.format(projection.prefixTokens)}</strong>
+            <span>tokens</span>
+          </div>
         )}
+        </div>
       </div>
       <Timeline
         spans={projection.spans}
@@ -215,7 +228,8 @@ export function Trajectory({
             onClose={() => setSelectedID("")}
             onOpenChat={() => onOpenChat(
               selected.turnID,
-              selected.callID || undefined
+              selected.callID || undefined,
+              selected.id
             )}
             onSelect={(id) => {
               setSelectedID(id);

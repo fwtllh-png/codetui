@@ -92,20 +92,20 @@ func TestEvidenceSectionKeepsRemindersWhenTheBudgetCutsIt(t *testing.T) {
 	}
 }
 
-func TestCodingPolicySectionIsSmallAndStable(t *testing.T) {
+func TestCodingPolicySectionIsStableAndContainsWorkflow(t *testing.T) {
 	section := NewCodingPolicySection()
 	if section.ID() != PartitionCodingPolicy {
 		t.Fatalf("id = %q", section.ID())
 	}
 	body := section.Render()
-	// The method rides in the stable prefix on every request, so its cost is paid
-	// once per session and must stay small.
-	if len(body) > 700 {
-		t.Fatalf("coding policy is %d bytes, want it to stay under 700", len(body))
-	}
 	for _, want := range []string{
 		"search_definition", "Read a file before editing it", "affected scope",
 		"Do not repeat a search",
+		"ordinary assistant text alongside the actual next tool",
+		"Do not invent a tool call",
+		"not before every tool or on a",
+		"never claim verification without successful execution evidence",
+		"Keep the final answer separate",
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("coding policy missing %q:\n%s", want, body)

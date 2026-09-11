@@ -91,11 +91,13 @@ type SetupOptions struct {
 }
 
 func (o SetupOptions) validate() error {
-	if strings.TrimSpace(o.WorkspaceRoot) == "" {
-		return errors.New("setup workspace root is required")
-	}
-	if err := o.WorkspaceIdentity.Validate(); err != nil {
-		return err
+	if o.WorkspaceRoot != "" || o.WorkspaceIdentity != (protocol.WorkspaceIdentity{}) {
+		if strings.TrimSpace(o.WorkspaceRoot) == "" {
+			return errors.New("setup workspace root is required with a workspace identity")
+		}
+		if err := o.WorkspaceIdentity.Validate(); err != nil {
+			return err
+		}
 	}
 	if o.Catalog.Version != SetupCatalogVersion || len(o.Catalog.Providers) == 0 {
 		return errors.New("setup provider catalog is required")

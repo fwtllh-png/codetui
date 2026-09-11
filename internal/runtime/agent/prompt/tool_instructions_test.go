@@ -11,13 +11,16 @@ func TestToolInstructionsRequireOneStepStructuredTerminalState(
 	instructions := ToolInstructions(true, "")
 	for _, required := range []string{
 		"request_user_input",
-		"Ordinary assistant text is provisional",
-		"turn_complete",
-		"exact user-facing final response in summary",
-		"without another model sample",
+		"stop calling tools and write the user-facing answer",
+		"ordinary assistant text",
+		"turn_complete is optional",
 		"status=incomplete",
-		"leave remaining steps pending",
-		"do not rewrite an unchanged plan just to retry complete",
+		"purpose=deliverable",
+		"leave future steps pending",
+		"does not replace the current execution plan",
+		"purpose=execution",
+		"Never reclassify",
+		"Open execution plan steps do not block",
 		"Batch independent read-only calls",
 		"do not reread unchanged files",
 		"normal sample boundary, not a truncated response",
@@ -27,7 +30,7 @@ func TestToolInstructionsRequireOneStepStructuredTerminalState(
 			t.Fatalf("tool instructions missing %q: %q", required, instructions)
 		}
 	}
-	if strings.Contains(instructions, "may end with an ordinary final response") {
-		t.Fatalf("tool instructions retain the prose terminal path: %q", instructions)
+	if strings.Contains(instructions, "Ordinary assistant text is provisional") {
+		t.Fatalf("tool instructions still force a structured terminal: %q", instructions)
 	}
 }

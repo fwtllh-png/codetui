@@ -60,14 +60,15 @@ QCode 将仓库理解、模型调用、受治理工具、审批、验证、持�
 git clone https://github.com/fwtllh-png/QCode.git
 cd QCode
 make install
-cd /path/to/your/project
 qcode
 ```
 
 `make install` 默认把完整的自包含二进制安装到 `~/.local/bin/qcode`。安装后可在
-任意目录运行 `qcode`，当前目录自动成为 Workspace 并打开本机页面。已有 Web
-Supervisor 运行时，新目录会注册为另一个独立 Workspace Runtime，并在同一侧栏中展示，
-无需再启动一个 Web 服务。首次进入时不会预选 Provider 或 Model，用户必须在页面中选择
+任意目录运行 `qcode`，只打开本机页面，不自动添加或选中当前目录。没有默认 Workspace；
+用户通过 `Add workspace` 选择目录，或显式运行 `qcode --workspace /path/to/project`。
+已有 Web Supervisor 运行时，显式目录会注册到已有进程，无需启动第二个 Web 服务。
+普通启动只恢复已添加的列表，删除最后一个 Workspace 后重启仍保持空列表。
+首次进入时不会预选 Provider 或 Model，用户必须在页面中选择
 OpenAI、Anthropic、DeepSeek、GLM 或自定义 OpenAI-Compatible 服务，并填写 Model ID。
 自定义 Endpoint 或未进入内置目录的模型还必须显式填写 Context、Output 和 Capability
 元数据；Runtime 不猜测模型限制。API Key 由操作系统 Keyring 加密保存，非敏感选择与

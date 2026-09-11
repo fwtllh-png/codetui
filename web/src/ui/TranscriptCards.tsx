@@ -28,6 +28,7 @@ import type {
   ConversationNode,
   ProjectedEditPlanFile
 } from "../projection/conversation";
+import {Collapse} from "./primitives/Collapse";
 
 type ReasoningNode = Extract<ConversationNode, {kind: "reasoning"}>;
 type ToolNode = Extract<ConversationNode, {kind: "tool"}>;
@@ -68,7 +69,7 @@ export function ReasoningDisclosure({entry}: {entry: ReasoningNode}) {
           {entry.summary}
         </small>
       </button>
-      {open && <div className="thinkBody">{entry.text}</div>}
+      <Collapse open={open}><div className="thinkBody">{entry.text}</div></Collapse>
     </div>
   );
 }
@@ -111,7 +112,7 @@ export function AgentDisclosure({
           {entry.status.replaceAll("_", " ")}
         </span>
       </button>
-      {open && (
+      <Collapse open={open}>
         <ol className="agentActivity">
           {entry.activities.map((activity) => (
             <li
@@ -140,7 +141,7 @@ export function AgentDisclosure({
             </li>
           ))}
         </ol>
-      )}
+      </Collapse>
     </div>
   );
 }
@@ -166,13 +167,11 @@ function agentActivityIcon(
 export function ToolDisclosure({
   entry,
   onInspect,
-  onAddContext,
-  onOpenFile
+  onAddContext
 }: {
   entry: ToolNode;
   onInspect: (callID: string) => void;
   onAddContext: (callID: string, text: string) => void;
-  onOpenFile?: (path: string) => void;
 }) {
   const [open, setOpen] = useState(false);
   const presentation = useMemo(() => toolPresentation(entry), [entry]);
@@ -205,27 +204,14 @@ export function ToolDisclosure({
         <DisclosureLeading open={open} icon={toolIcon(entry.variant)} />
         <span className="disclosureTitle">{entry.title}</span>
         <span className="disclosureSeparator" aria-hidden="true" />
-        {presentation.kind === "read" && onOpenFile ? (
-          <button
-            className="toolFileLink"
-            title="Open in local editor"
-            onClick={(event) => {
-              event.stopPropagation();
-              onOpenFile(presentation.path);
-            }}
-          >
-            {presentation.path}
-          </button>
-        ) : (
-          <small>{entry.errorSummary || entry.summary}</small>
-        )}
+        <small>{entry.errorSummary || entry.summary}</small>
         {entry.state !== "completed" && (
           <span className="srOnly">{entry.state}</span>
         )}
       </div>
-      {open && (
+      <Collapse open={open}>
         <div className="toolExpanded">
-          {renderToolBody(presentation, entry, onOpenFile)}
+          {renderToolBody(presentation, entry)}
           {entry.state === "failed" &&
             entry.output &&
             presentation.kind !== "shell" &&
@@ -248,7 +234,7 @@ export function ToolDisclosure({
             )}
           </div>
         </div>
-      )}
+      </Collapse>
     </div>
   );
 }
@@ -366,19 +352,18 @@ function toolPresentation(entry: ToolNode): ToolPresentation {
 
 function renderToolBody(
   presentation: ToolPresentation,
-  entry: ToolNode,
-  onOpenFile?: (path: string) => void
+  entry: ToolNode
 ) {
   switch (presentation.kind) {
     case "read":
-      return <ReadCard value={presentation} onOpenFile={onOpenFile} />;
+      return <ReadCard value={presentation} />;
     case "shell":
       return <TerminalCard value={presentation} />;
     case "search-matches":
     case "search-paths":
-      return <SearchCard value={presentation} onOpenFile={onOpenFile} />;
+      return <SearchCard value={presentation} />;
     case "diff":
-      return <DiffCard value={presentation} onOpenFile={onOpenFile} />;
+      return <DiffCard value={presentation} />;
     default:
       return (
         <div className="toolIOCard">
@@ -404,11 +389,9 @@ type DiffRow =
   | {kind: "removed" | "added"; text: string};
 
 function DiffCard({
-  value,
-  onOpenFile
+  value
 }: {
   value: DiffPresentation;
-  onOpenFile?: (path: string) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const rows = useMemo<DiffRow[]>(() => {
@@ -461,16 +444,7 @@ function DiffCard({
         : row.text
   ).join("\n");
   const renderRow = (row: DiffRow, key: string) => row.kind === "path" ? (
-    onOpenFile ? (
-      <button
-        className="diffPath"
-        key={key}
-        title="Open in local editor"
-        onClick={() => onOpenFile(row.path)}
-      >
-        {row.text}
-      </button>
-    ) : <div className="diffPathLabel" key={key}>{row.text}</div>
+    <div className="diffPathLabel" key={key}>{row.text}</div>
   ) : (
     <div className="diffLine" data-line={row.kind} key={key}>{row.text || " "}</div>
   );
@@ -511,11 +485,9 @@ export function EditPlanPreview({
 }
 
 function ReadCard({
-  value,
-  onOpenFile
+  value
 }: {
   value: ReadPresentation;
-  onOpenFile?: (path: string) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const rows = value.lines.map((text, index) => ({
@@ -526,17 +498,7 @@ function ReadCard({
   return (
     <div className="toolSurface readCard" data-read>
       <div className="toolSurfaceHeader">
-        {onOpenFile ? (
-          <button
-            className="surfaceFileLink"
-            title="Open in local editor"
-            onClick={() => onOpenFile(value.path)}
-          >
-            {value.path}
-          </button>
-        ) : (
-          <span className="surfaceFileLabel">{value.path}</span>
-        )}
+        <span className="surfaceFileLabel">{value.path}</span>
         <span className="surfaceMeta">
           {value.truncated ? `${rows.length}+ lines` : `${rows.length} lines`}
         </span>
@@ -620,11 +582,9 @@ function TerminalCard({value}: {value: ShellPresentation}) {
 }
 
 function SearchCard({
-  value,
-  onOpenFile
+  value
 }: {
   value: SearchPresentation;
-  onOpenFile?: (path: string) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const rows: SearchRenderRow[] = value.kind === "search-paths"
@@ -663,24 +623,11 @@ function SearchCard({
         </div>
       );
     }
-    if (!onOpenFile) {
-      return (
-        <div className={row.kind === "file" ? "searchFileLabel" : "searchPathLabel"} key={key}>
-          <span>{row.path}</span>
-          {row.kind === "file" && <small>{row.count}</small>}
-        </div>
-      );
-    }
     return (
-      <button
-        className={row.kind === "file" ? "searchFile" : "searchPath"}
-        key={key}
-        title="Open in local editor"
-        onClick={() => onOpenFile(row.path)}
-      >
+      <div className={row.kind === "file" ? "searchFileLabel" : "searchPathLabel"} key={key}>
         <span>{row.path}</span>
         {row.kind === "file" && <small>{row.count}</small>}
-      </button>
+      </div>
     );
   };
   return (

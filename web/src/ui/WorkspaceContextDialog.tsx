@@ -19,6 +19,7 @@ import {
   useState,
   type ReactNode
 } from "react";
+import {useModalFocus} from "./primitives/useModalFocus";
 import type {
   EditorRange,
   WorkspaceDiagnosticContext,
@@ -63,6 +64,8 @@ export function WorkspaceContextDialog({
   const [diff, setDiff] = useState<WorkspaceDiff>();
   const [error, setError] = useState("");
   const closeRef = useRef<HTMLButtonElement>(null);
+  const dialogRef = useRef<HTMLElement>(null);
+  useModalFocus(dialogRef, true, onClose);
   const reportError = useCallback((value: unknown) => {
     setError(value instanceof Error ? value.message : String(value));
     onError(value);
@@ -72,17 +75,11 @@ export function WorkspaceContextDialog({
   );
 
   useEffect(() => {
-    closeRef.current?.focus();
-    const close = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", close);
     void client.browseWorkspace(".").then((result) => {
       setPath(result.path);
       setEntries(result.entries);
     }, reportError);
-    return () => window.removeEventListener("keydown", close);
-  }, [client, onClose, reportError]);
+  }, [client, reportError]);
 
   useEffect(() => () => {
     if (imageURL) URL.revokeObjectURL(imageURL);
@@ -138,11 +135,13 @@ export function WorkspaceContextDialog({
   );
 
   return (
-    <div className="contextDialogOverlay" role="presentation" onMouseDown={(event) => {
+    <div className="contextDialogOverlay" data-motion-backdrop role="presentation" onMouseDown={(event) => {
       if (event.target === event.currentTarget) onClose();
     }}>
       <section
+        ref={dialogRef}
         className="contextDialog"
+        data-motion-surface
         role="dialog"
         aria-modal="true"
         aria-labelledby="context-dialog-title"

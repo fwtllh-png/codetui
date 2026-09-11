@@ -312,7 +312,7 @@ func (b *Broker) snapshot(
 	} else if b.commonDir != common {
 		return RepositoryState{}, errors.New("VCS mutation changed Repository identity")
 	}
-	head, err := runGit(ctx, dir, "rev-parse", "--verify", "HEAD")
+	head, err := runGit(ctx, dir, "rev-parse", "--revs-only", "--end-of-options", "HEAD")
 	if err != nil {
 		return RepositoryState{}, err
 	}

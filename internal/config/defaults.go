@@ -51,7 +51,7 @@ func Defaults() Config {
 				HandleMaxEntities:                32,
 				OmissionSampleMaxEntities:        8,
 				SemanticNarrativeMaxInputTokens:  4096,
-				SemanticNarrativeMaxOutputTokens: 512,
+				SemanticNarrativeMaxOutputTokens: 0,
 				SemanticNarrativeMaxItems:        32,
 				SemanticNarrativeItemMaxBytes:    512,
 				SemanticNarrativeTimeout:         30 * time.Second,

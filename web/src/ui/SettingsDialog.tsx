@@ -29,6 +29,8 @@ import {
   useState,
   type ReactNode
 } from "react";
+import {useModalFocus} from "./primitives/useModalFocus";
+import {Presence} from "./primitives/Presence";
 import type {
   AgentPreset,
   AgentPresetApplyResult,
@@ -140,6 +142,8 @@ export function SettingsDialog({
   );
   const [notificationPending, setNotificationPending] = useState(false);
   const closeRef = useRef<HTMLButtonElement>(null);
+  const dialogRef = useRef<HTMLElement>(null);
+  useModalFocus(dialogRef, true, onClose);
   const profileDraftRef = useRef(profileDraft);
   const profileBaselineRef = useRef(profileBaseline);
   const profileOwnerRef = useRef(snapshot.selectedSessionID);
@@ -166,17 +170,6 @@ export function SettingsDialog({
   const requestClose = useCallback(() => {
     onClose();
   }, [onClose]);
-  useEffect(() => {
-    closeRef.current?.focus();
-  }, []);
-  useEffect(() => {
-    const close = (event: KeyboardEvent) => {
-      if (event.key === "Escape") requestClose();
-    };
-    window.addEventListener("keydown", close);
-    return () => window.removeEventListener("keydown", close);
-  }, [requestClose]);
-
   useEffect(() => {
     const next = settingsProfileDraft(snapshot);
     const sessionChanged = profileOwnerRef.current !== snapshot.selectedSessionID;
@@ -241,11 +234,13 @@ export function SettingsDialog({
   };
 
   return (
-    <div className="settingsOverlay" role="presentation" onMouseDown={(event) => {
+    <div className="settingsOverlay" data-motion-backdrop role="presentation" onMouseDown={(event) => {
       if (event.target === event.currentTarget) requestClose();
     }}>
       <section
+        ref={dialogRef}
         className="settingsDialog"
+        data-motion-surface
         role="dialog"
         aria-modal="true"
         aria-labelledby="settings-title"
@@ -644,7 +639,7 @@ function ModelSettings({
       {selectedModel && (
         <ModelCapabilityPanel model={selectedModel} />
       )}
-      {addingModel && (
+      <Presence open={addingModel} kind="dialog">
         <ModelEditorDialog
           client={client}
           onClose={() => setAddingModel(false)}
@@ -658,7 +653,7 @@ function ModelSettings({
           }}
           onError={onError}
         />
-      )}
+      </Presence>
     </SettingsSectionView>
   );
 }
@@ -674,6 +669,8 @@ function ModelEditorDialog({
   onAdded: (model: string, metadata: SetupModelMetadata) => void;
   onError: (error: unknown) => void;
 }) {
+  const dialogRef = useRef<HTMLElement>(null);
+  useModalFocus(dialogRef, true, onClose);
   const [modelID, setModelID] = useState("");
   const [metadata, setMetadata] = useState<ModelMetadataDraft>(
     emptyModelMetadataDraft()
@@ -724,9 +721,11 @@ function ModelEditorDialog({
     }
   };
   return (
-    <div className="modelEditorOverlay" role="presentation">
+    <div className="modelEditorOverlay" data-motion-backdrop role="presentation">
       <section
         className="modelEditorDialog"
+        data-motion-surface
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby="model-editor-title"

@@ -18,6 +18,10 @@ import type {
   ExtensionControlAction,
   ExtensionControlResult,
   ExtensionProjection,
+  GitActionRequest,
+  GitActionResult,
+  GitOverview,
+  GitPatch,
   ModelCatalog,
   ModelCatalogEntry,
   ModelMutationRequest,
@@ -31,7 +35,6 @@ import type {
   RuntimeEvent,
   SessionBinding,
   SessionDeleteResult,
-  SessionExport,
   SessionHistoryPage,
   SessionLifecycleUpdate,
   SessionList,
@@ -62,7 +65,6 @@ import type {
   WorkspaceDiff,
   WorkspaceGitState,
   WorkspaceImage,
-  WorkspaceOpenResult,
   WorkspaceResource,
   WorkspaceSearchResult,
   WorkspaceSymbol,
@@ -109,7 +111,6 @@ export type RuntimePhase =
 export interface RuntimeSnapshot {
   phase: RuntimePhase;
   workspaceRoot: string;
-  canOpenPath: boolean;
   includeArchived: boolean;
   contextResources: readonly EditorContextReference[];
   messageFeedback: Readonly<Record<string, "positive" | "negative">>;
@@ -151,7 +152,6 @@ type Hydration = {
 const emptySnapshot: RuntimeSnapshot = {
   phase: "booting",
   workspaceRoot: "",
-  canOpenPath: false,
   includeArchived: false,
   contextResources: [],
   messageFeedback: {},
@@ -200,6 +200,7 @@ const progressEventKinds = new Set([
 ]);
 
 const sessionActivityEventKinds = new Set([
+  "session.title.updated",
   "approval.required",
   "approval.resolved",
   "input.required",
@@ -219,9 +220,14 @@ export class RuntimeClient {
   private bootTimer?: number;
   private generation = 0;
   private sessionListGeneration = 0;
+  private sessionListHydrationRequested = false;
   private sessionWorkspaceIDs = new Map<string, string>();
   private selectionGeneration = 0;
   private hydration?: Hydration;
+  private historyRequest?: {
+    controller: AbortController;
+    promise: Promise<number>;
+  };
   private state: RuntimeSnapshot = emptySnapshot;
   private listeners = new Set<Listener>();
   private conversationProjection = new ConversationProjection();
@@ -288,7 +294,6 @@ export class RuntimeClient {
         this.update({
           phase: "setup",
           workspaceRoot: bootstrap.workspace_root ?? "",
-          canOpenPath: Boolean(bootstrap.can_open_path),
           setupCatalog: bootstrap.setup_catalog,
           workspaces: workspaceCatalog.workspaces,
           selectedWorkspaceID,
@@ -300,7 +305,6 @@ export class RuntimeClient {
         this.update({
           phase: bootstrap.problem ? "failed" : "booting",
           workspaceRoot: bootstrap.workspace_root ?? "",
-          canOpenPath: Boolean(bootstrap.can_open_path),
           problem: bootstrap.problem
         });
         if (!bootstrap.problem) {
@@ -314,7 +318,6 @@ export class RuntimeClient {
         this.update({
           phase: "ready",
           workspaceRoot: "",
-          canOpenPath: Boolean(bootstrap.can_open_path),
           workspaces: workspaceCatalog.workspaces,
           selectedWorkspaceID: "",
           sessions: [],
@@ -332,7 +335,6 @@ export class RuntimeClient {
       this.update({
         phase: "reconnecting",
         workspaceRoot: selectedWorkspace?.root ?? bootstrap.workspace_root ?? "",
-        canOpenPath: Boolean(bootstrap.can_open_path),
         workspaces: workspaceCatalog.workspaces,
         selectedWorkspaceID,
         problem: undefined,
@@ -351,6 +353,7 @@ export class RuntimeClient {
   }
 
   stop(): void {
+    this.cancelEarlierHistory();
     this.eventNotifier.flushNow();
     this.flushBrowserState();
     this.generation += 1;
@@ -370,6 +373,7 @@ export class RuntimeClient {
     hydrate = true,
     includeArchived = this.state.includeArchived
   ): Promise<void> {
+    this.sessionListHydrationRequested ||= hydrate;
     const generation = ++this.sessionListGeneration;
     const workspaces = this.state.workspaces.filter((workspace) => workspace.ready);
     const lists = await Promise.allSettled(workspaces.map((workspace) =>
@@ -380,6 +384,10 @@ export class RuntimeClient {
       }, {workspaceID: workspace.id})
     ));
     if (generation !== this.sessionListGeneration) return;
+    // A newer background list may supersede the startup list, but it must
+    // inherit the request to restore the selected session's full history.
+    const hydrateSelected = this.sessionListHydrationRequested;
+    this.sessionListHydrationRequested = false;
     const sessionWorkspaceIDs = new Map<string, string>();
     const sessions = lists.flatMap((list, index) => {
       const workspace = workspaces[index];
@@ -409,7 +417,7 @@ export class RuntimeClient {
       selectedSessionID: nextSelected,
       includeArchived
     });
-    if (hydrate && nextSelected && (!this.state.profile || nextSelected !== selected)) {
+    if (hydrateSelected && nextSelected && (!this.state.profile || nextSelected !== selected)) {
       await this.selectSession(nextSelected);
     }
   }
@@ -460,6 +468,7 @@ export class RuntimeClient {
       await this.switchWorkspace(fallback.id, true);
       return;
     }
+    this.cancelEarlierHistory();
     this.eventNotifier.cancel();
     this.pendingSelectedEvents = [];
     this.hydration = undefined;
@@ -517,6 +526,39 @@ export class RuntimeClient {
     });
   }
 
+  async gitOverview(workspaceID: string, signal?: AbortSignal): Promise<GitOverview> {
+    return this.call("workspace/git-status", {}, {workspaceID, signal});
+  }
+
+  async gitPatch(workspaceID: string, path: string, staged: boolean, signal?: AbortSignal): Promise<GitPatch> {
+    return this.call("workspace/git-diff", {path, staged}, {workspaceID, signal});
+  }
+
+  async executeGitAction(workspaceID: string, sessionID: string | undefined, action: GitActionRequest): Promise<GitActionResult> {
+    const session = this.state.sessions.find((item) => item.session_id === sessionID);
+    if (workspaceID !== this.state.selectedWorkspaceID ||
+        sessionID && (sessionID !== this.state.selectedSessionID ||
+        !session || this.workspaceIDForSession(sessionID) !== workspaceID ||
+        session.isolation !== "shared" || session.archived)) {
+      throw new Error("The selected Workspace or Session changed.");
+    }
+    if (session && !["idle", "completed", "failed"].includes(session.status) ||
+        this.state.sessions.some((item) =>
+          this.workspaceIDForSession(item.session_id) === workspaceID &&
+          ["running", "awaiting_approval", "awaiting_input"].includes(item.status)) ||
+        this.state.profile?.profile.mode === "plan" || this.state.profile?.profile.approval_posture === "never") {
+      throw new Error("Finish or resume current work before changing Git state.");
+    }
+    if (!action.branch || !action.revision || (action.action === "commit" || action.action === "commit_push") && (!action.paths?.length || !action.message?.trim()) ||
+        (action.action === "push" || action.action === "commit_push") && !action.remote ||
+        action.action === "create_branch" && !action.new_branch?.trim()) {
+      throw new Error("Git request is incomplete.");
+    }
+    return this.call<GitActionResult>("workspace/git-action", {
+      ...action, session_id: sessionID
+    }, {workspaceID, idempotencyKey: crypto.randomUUID()});
+  }
+
   async selectWorkspace(workspaceID: string): Promise<void> {
     await this.switchWorkspace(workspaceID, true);
   }
@@ -536,6 +578,7 @@ export class RuntimeClient {
       if (hydrate) await this.refreshSessions();
       return;
     }
+    this.cancelEarlierHistory();
     this.eventNotifier.cancel();
     this.pendingSelectedEvents = [];
     this.hydration = undefined;
@@ -600,7 +643,7 @@ export class RuntimeClient {
     const sessionID = `session_web_${idempotencyKey}`;
     const binding = await this.call<SessionBinding>(
       "session/create",
-      {session_id: sessionID, title: "New Chat", isolation},
+      {session_id: sessionID, isolation},
       {idempotencyKey, retryNetwork: true}
     );
     await this.refreshSessions("", false);
@@ -682,6 +725,7 @@ export class RuntimeClient {
       await this.switchWorkspace(ownerWorkspace.id, false);
     }
     const workspaceID = ownerWorkspace?.id ?? this.state.selectedWorkspaceID;
+    this.cancelEarlierHistory();
     this.eventNotifier.cancel();
     this.pendingSelectedEvents = [];
     const previousSessionID = this.state.selectedSessionID;
@@ -775,8 +819,11 @@ export class RuntimeClient {
     const refreshForForeignEvent = hydration.events.some(
       ({sessionID: owner}) => owner !== sessionID
     );
-    const refreshForDefaultTitle = summary?.title === "New Chat" &&
+    const refreshForDefaultTitle = summary?.title_source === "default" &&
       snapshotEvents.some((event) => event.kind === "turn.started");
+    const refreshForTitle = hydration.events.some(
+      ({event}) => event.kind === "session.title.updated"
+    );
     this.commitCursor(Math.max(
       snapshot.through_sequence,
       latestBufferedSequence
@@ -807,7 +854,7 @@ export class RuntimeClient {
       problem: undefined
     });
     this.persistSelectedSession(sessionID);
-    if (refreshForForeignEvent || refreshForDefaultTitle) {
+    if (refreshForForeignEvent || refreshForDefaultTitle || refreshForTitle) {
       void this.refreshSessions("", false);
     }
     } catch (error) {
@@ -1135,25 +1182,56 @@ export class RuntimeClient {
     return result;
   }
 
-  async loadEarlierHistory(limit = 200): Promise<number> {
+  loadEarlierHistory(limit = 200): Promise<number> {
+    if (this.historyRequest) return this.historyRequest.promise;
+    this.eventNotifier.flushNow();
     const sessionID = this.requireSession();
+    const workspaceID = this.state.selectedWorkspaceID;
+    const generation = this.selectionGeneration;
     const before = this.state.events[0]?.sequence;
-    if (!before || !this.state.historyMoreBefore) return 0;
-    const page = await this.call<SessionHistoryPage>("session/history", {
-      session_id: sessionID,
-      before_sequence: before,
-      limit
-    });
-    if (sessionID !== this.state.selectedSessionID) return 0;
-    const known = new Set(this.state.events.map((event) => event.sequence));
-    const earlier = page.events.filter((event) => !known.has(event.sequence));
-    const events = [...earlier, ...this.state.events];
-    this.update({
-      events,
-      conversation: this.replaceConversation(events),
-      historyMoreBefore: Boolean(page.more_before)
-    });
-    return earlier.length;
+    if (!before || !this.state.historyMoreBefore || this.hydration) return Promise.resolve(0);
+    const request = {controller: new AbortController(), promise: Promise.resolve(0)};
+    this.historyRequest = request;
+    const current = () => !request.controller.signal.aborted &&
+      generation === this.selectionGeneration &&
+      workspaceID === this.state.selectedWorkspaceID &&
+      sessionID === this.state.selectedSessionID;
+    request.promise = (async () => {
+      try {
+        const page = await this.call<SessionHistoryPage>("session/history", {
+          session_id: sessionID, before_sequence: before, limit
+        }, {workspaceID, signal: request.controller.signal});
+        if (!current()) return 0;
+        this.eventNotifier.flushNow();
+        const known = new Set(this.state.events.map((event) => event.sequence));
+        const earlier = page.events.filter((event) => {
+          if (event.sequence >= before || known.has(event.sequence)) return false;
+          known.add(event.sequence);
+          return true;
+        }).sort((left, right) => left.sequence - right.sequence);
+        if (earlier.length === 0 && page.more_before) {
+          throw new Error("History did not advance. Retry loading earlier messages.");
+        }
+        const events = [...earlier, ...this.state.events];
+        this.update({
+          events,
+          conversation: earlier.length > 0 ? this.replaceConversation(events) : this.state.conversation,
+          historyMoreBefore: Boolean(page.more_before)
+        });
+        return earlier.length;
+      } catch (error) {
+        if (!current()) return 0;
+        throw error;
+      } finally {
+        if (this.historyRequest === request) this.historyRequest = undefined;
+      }
+    })();
+    return request.promise;
+  }
+
+  private cancelEarlierHistory(): void {
+    this.historyRequest?.controller.abort();
+    this.historyRequest = undefined;
   }
 
   async setToolEnabled(toolID: string, enabled: boolean): Promise<void> {
@@ -1254,10 +1332,6 @@ export class RuntimeClient {
 
   async readWorkspaceResource(path: string): Promise<WorkspaceResource> {
     return this.call<WorkspaceResource>("workspace/resource", {path});
-  }
-
-  async openWorkspacePath(path: string): Promise<WorkspaceOpenResult> {
-    return this.call<WorkspaceOpenResult>("workspace/open", {path});
   }
 
   async readWorkspaceImage(path: string): Promise<WorkspaceImage> {
@@ -1463,12 +1537,6 @@ export class RuntimeClient {
     });
   }
 
-  async exportSession(): Promise<SessionExport> {
-    return this.call<SessionExport>("session/export", {
-      session_id: this.requireSession()
-    });
-  }
-
   async diagnostics(): Promise<Record<string, unknown>> {
     return this.call<Record<string, unknown>>("system/diagnostics", {});
   }
@@ -1559,6 +1627,7 @@ export class RuntimeClient {
       idempotencyKey?: string;
       retryNetwork?: boolean;
       workspaceID?: string;
+      signal?: AbortSignal;
     } = {}
   ): Promise<T> {
     const headers: Record<string, string> = {
@@ -1578,7 +1647,8 @@ export class RuntimeClient {
       response = await fetch(`/api/v1/${route}`, {
         method: "POST",
         headers,
-        body: JSON.stringify(body)
+        body: JSON.stringify(body),
+        signal: options.signal
       });
     } catch (error) {
       if (!options.retryNetwork) throw error;

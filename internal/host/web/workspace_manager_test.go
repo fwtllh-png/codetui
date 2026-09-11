@@ -73,6 +73,32 @@ func TestWorkspaceRegistryRejectsFiles(t *testing.T) {
 	}
 }
 
+func TestWorkspaceRegistryHasNoImplicitInitialRoot(t *testing.T) {
+	dataDir := t.TempDir()
+	manager, err := newWorkspaceRuntimeManager(dataDir, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog, err := manager.List(t.Context())
+	if err != nil || len(catalog.Workspaces) != 0 {
+		t.Fatalf("empty registry=%+v err=%v", catalog, err)
+	}
+	added, err := manager.Add(t.Context(), t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.Remove(t.Context(), added.ID); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := newWorkspaceRuntimeManager(dataDir, "")
+	if err != nil || len(reopened.roots) != 0 {
+		t.Fatalf("removed Workspace restored: err=%v", err)
+	}
+	if _, err := reopened.Add(t.Context(), dataDir); err == nil {
+		t.Fatal("Supervisor state was accepted as a Workspace before configuration")
+	}
+}
+
 func TestWorkspaceRegistryRemovePersistsAndIsIdempotent(t *testing.T) {
 	dataDir := t.TempDir()
 	initial := t.TempDir()

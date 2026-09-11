@@ -202,7 +202,7 @@ func (r *Service) PrepareTurnRecovery(
 			})
 			delete(toolStarts, data.CallID)
 		case *protocol.PlanDeltaData:
-			if data.ArtifactID != "" {
+			if data.ArtifactID != "" && data.Purpose.Normalize() == protocol.PlanPurposeExecution {
 				copy := *data
 				submittedPlan = &copy
 			}
@@ -1262,6 +1262,10 @@ func (r *Service) PreparePlanExecution(
 	if err != nil {
 		return PlanExecutionPreparation{}, err
 	}
+	if artifact.Purpose.Normalize() != protocol.PlanPurposeExecution {
+		return PlanExecutionPreparation{}, runtimeProblem(protocol.CodeConflict,
+			"deliverable Plan must be submitted as an execution Plan before implementation", nil)
+	}
 	if err := validateStructuredPlan(artifact.Body, true); err != nil {
 		return PlanExecutionPreparation{}, runtimeProblem(
 			protocol.CodeInvalidArgument,
@@ -1354,6 +1358,10 @@ func (r *Service) PreparePlanExecutionTo(
 	artifact, err := r.ArtifactStore().GetPlan(ctx, planID)
 	if err != nil {
 		return PlanExecutionPreparation{}, err
+	}
+	if artifact.Purpose.Normalize() != protocol.PlanPurposeExecution {
+		return PlanExecutionPreparation{}, runtimeProblem(protocol.CodeConflict,
+			"deliverable Plan must be submitted as an execution Plan before implementation", nil)
 	}
 	if err := validateStructuredPlan(artifact.Body, true); err != nil {
 		return PlanExecutionPreparation{}, runtimeProblem(
@@ -1574,6 +1582,11 @@ func (r *Service) DecoratePlanArtifact(
 			err,
 		)
 	}
+	purpose, err := protocol.PlanPurposeFromBody(data.Body)
+	if err != nil {
+		return err
+	}
+	data.Purpose = purpose
 	sessionID, err := r.SessionForThread(ctx, threadID)
 	if err != nil {
 		return err
@@ -1612,8 +1625,8 @@ func (r *Service) DecoratePlanArtifact(
 	)
 	data.ProfileRevision = profile.Revision
 	data.Status = string(protocol.PlanArtifactReady)
-	data.CanImplement = true
-	data.CanAutopilot = true
+	data.CanImplement = purpose == protocol.PlanPurposeExecution
+	data.CanAutopilot = purpose == protocol.PlanPurposeExecution
 	return nil
 }
 func (r *Service) PersistSessionArtifact(
@@ -1654,6 +1667,7 @@ func (r *Service) PersistSessionArtifact(
 			TurnID:                 event.TurnID,
 			Cursor:                 event.Sequence,
 			Status:                 protocol.PlanArtifactReady,
+			Purpose:                data.Purpose,
 			Body:                   data.Body,
 			ProfileRevision:        data.ProfileRevision,
 			ExecutionProfileDigest: executionProfileDigest,

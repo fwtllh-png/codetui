@@ -89,6 +89,7 @@ func (r *Service) validatePlanRecovery(
 			return nil
 		}
 		if submitted, ok := event.Data.(*protocol.PlanDeltaData); ok &&
+			submitted.Purpose.Normalize() == protocol.PlanPurposeExecution &&
 			payload.Recovery.PlanTransition == protocol.PlanTransitionAutopilot &&
 			submitted.ArtifactID == payload.Recovery.PlanID &&
 			submitted.ProfileRevision == payload.Recovery.ProfileRevision {

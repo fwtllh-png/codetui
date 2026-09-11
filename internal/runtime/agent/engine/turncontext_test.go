@@ -107,7 +107,7 @@ func TestSnapshotTurnSpecFreezesSessionInputs(t *testing.T) {
 	}
 }
 
-func TestSnapshotTurnSpecRequiresStructuredTerminalForPlanOnly(
+func TestSnapshotTurnSpecLeavesStructuredTerminalOff(
 	t *testing.T,
 ) {
 	for _, test := range []struct {
@@ -118,7 +118,7 @@ func TestSnapshotTurnSpecRequiresStructuredTerminalForPlanOnly(
 		want      bool
 	}{
 		{name: "answer", inputHost: interact.NewHost(0), intent: protocol.TurnIntentAnswer, require: true, want: false},
-		{name: "plan", intent: protocol.TurnIntentPlan, want: true},
+		{name: "plan", intent: protocol.TurnIntentPlan, want: false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			spec, err := SnapshotTurnSpec(
@@ -145,7 +145,7 @@ func TestSnapshotTurnSpecRequiresStructuredTerminalForPlanOnly(
 					test.want,
 				)
 			}
-			if spec.Kernel.CompletionRequired != (test.require || test.intent == protocol.TurnIntentPlan) {
+			if spec.Kernel.CompletionRequired != test.require {
 				t.Fatalf("completion required = %t", spec.Kernel.CompletionRequired)
 			}
 		})

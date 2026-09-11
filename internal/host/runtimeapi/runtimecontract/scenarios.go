@@ -507,6 +507,21 @@ func readModelsExposeCompletedThread(t *testing.T, host Host, setup Setup) {
 	if seen[len(seen)-1].Kind != protocol.EventTurnCompleted {
 		t.Fatalf("%s: read-model turn ended with %s", host.Transport(), seen[len(seen)-1].Kind)
 	}
+	var streamedUsage []*protocol.UsageData
+	for _, event := range seen {
+		if data, ok := event.Data.(*protocol.UsageData); ok {
+			streamedUsage = append(streamedUsage, data)
+		}
+	}
+	if len(streamedUsage) != 1 {
+		t.Fatalf("%s: want one fixture usage report, got %d; events = %s",
+			host.Transport(), len(streamedUsage), kindsOf(seen))
+	}
+	usage := streamedUsage[0]
+	if usage.Sample != 1 || usage.InputTokens != 5 || usage.OutputTokens != 5 ||
+		usage.ReasoningTokens != 4 || usage.CachedTokens != 0 {
+		t.Fatalf("%s: fixture usage = %+v", host.Transport(), usage)
+	}
 	state, err := host.ReadState(t.Context())
 	if err != nil {
 		t.Fatal(err)
@@ -527,11 +542,20 @@ func readModelsExposeCompletedThread(t *testing.T, host Host, setup Setup) {
 	}
 	if len(state.Usage) != 1 || state.Usage[0].ThreadID != started.ThreadID ||
 		state.Usage[0].TurnID != started.TurnID || state.Rollup.Turns != 1 ||
-		state.Rollup.Calls != state.Usage[0].Calls {
+		state.Usage[0].Calls != 1 || state.Rollup.Calls != state.Usage[0].Calls {
 		t.Fatalf(
 			"%s: usage/rollup = %+v / %+v",
 			host.Transport(), state.Usage, state.Rollup,
 		)
+	}
+	row := state.Usage[0]
+	if row.InputTokens != usage.InputTokens || row.OutputTokens != usage.OutputTokens ||
+		row.ReasoningTokens != usage.ReasoningTokens || row.CachedTokens != usage.CachedTokens ||
+		state.Rollup.InputTokens != row.InputTokens || state.Rollup.OutputTokens != row.OutputTokens ||
+		state.Rollup.ReasoningTokens != row.ReasoningTokens || state.Rollup.CachedTokens != row.CachedTokens ||
+		state.Rollup.TotalTokens != row.InputTokens+row.OutputTokens {
+		t.Fatalf("%s: usage event, row and rollup disagree: %+v / %+v / %+v",
+			host.Transport(), usage, row, state.Rollup)
 	}
 }
 

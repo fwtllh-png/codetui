@@ -20,6 +20,7 @@ import {
   type ConversationNavigationKind
 } from "./conversationNavigation";
 import "./ConversationNavigator.css";
+import {useModalFocus} from "./primitives/useModalFocus";
 
 const filters: ReadonlyArray<{
   kind: ConversationNavigationKind | "all";
@@ -28,6 +29,7 @@ const filters: ReadonlyArray<{
   {kind: "all", label: "All"},
   {kind: "turn", label: "Turns"},
   {kind: "question", label: "Questions"},
+  {kind: "message", label: "Updates"},
   {kind: "tool", label: "Tools"},
   {kind: "file", label: "Files"}
 ];
@@ -53,6 +55,7 @@ export function ConversationNavigator({
   const [activeID, setActiveID] = useState("");
   const [loadingEarlier, setLoadingEarlier] = useState(false);
   const dialogRef = useRef<HTMLDivElement>(null);
+  useModalFocus(dialogRef, true, onClose);
   const searchRef = useRef<HTMLInputElement>(null);
   const results = useMemo(
     () => searchConversationNavigation(items, query, filter),
@@ -90,11 +93,6 @@ export function ConversationNavigator({
   };
 
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (event.key === "Escape") {
-      event.preventDefault();
-      onClose();
-      return;
-    }
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
       event.preventDefault();
       move(event.key === "ArrowDown" ? 1 : -1);
@@ -105,24 +103,12 @@ export function ConversationNavigator({
       selectActive();
       return;
     }
-    if (event.key !== "Tab") return;
-    const focusable = Array.from(
-      dialogRef.current?.querySelectorAll<HTMLElement>(
-        "button:not(:disabled), input:not(:disabled)"
-      ) ?? []
-    );
-    if (focusable.length === 0) return;
-    const current = focusable.indexOf(document.activeElement as HTMLElement);
-    const next = event.shiftKey
-      ? (current <= 0 ? focusable.length - 1 : current - 1)
-      : (current >= focusable.length - 1 ? 0 : current + 1);
-    event.preventDefault();
-    focusable[next]?.focus();
   };
 
   return (
     <div
       className="conversationNavigatorBackdrop"
+      data-motion-backdrop
       onPointerDown={(event) => {
         if (event.target === event.currentTarget) onClose();
       }}
@@ -130,6 +116,7 @@ export function ConversationNavigator({
       <div
         ref={dialogRef}
         className="conversationNavigator"
+        data-motion-surface
         role="dialog"
         aria-modal="true"
         aria-label="Search conversation"
@@ -149,7 +136,7 @@ export function ConversationNavigator({
                 activeID ? navigationResultDOMID(activeID) : undefined
               }
               value={query}
-              placeholder="Search turns, questions, tools, and files"
+              placeholder="Search conversation"
               autoComplete="off"
               spellCheck={false}
               onChange={(event) => setQuery(event.target.value)}
@@ -241,7 +228,7 @@ export function ConversationNavigator({
 }
 
 function NavigationIcon({kind}: {kind: ConversationNavigationKind}) {
-  if (kind === "question") return <MessageSquareText size={15} />;
+  if (kind === "question" || kind === "message") return <MessageSquareText size={15} />;
   if (kind === "tool") return <Wrench size={15} />;
   if (kind === "file") return <FileCode2 size={15} />;
   return <ListTree size={15} />;

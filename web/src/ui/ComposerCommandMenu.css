@@ -35,7 +35,7 @@
   color: var(--ch-text);
   background: var(--ch-panel-raised);
   border: 1px solid var(--ch-border-strong);
-  border-radius: 8px;
+  border-radius: var(--ch-radius-control);
   box-shadow: var(--ch-shadow);
   outline: 0;
 }
@@ -51,7 +51,7 @@
   height: 34px;
   padding: 0 9px;
   border: 1px solid var(--ch-border);
-  border-radius: 6px;
+  border-radius: var(--ch-radius);
   outline: none;
   background: var(--ch-panel);
   color: var(--ch-text);
@@ -67,8 +67,8 @@
 .commandMenuTitle {
   padding: 5px 8px 3px;
   color: var(--ch-text-secondary);
-  font-size: 10px;
-  font-weight: 650;
+  font-size: 11px;
+  font-weight: 600;
   text-transform: uppercase;
 }
 
@@ -92,7 +92,7 @@
   color: var(--ch-text);
   text-align: left;
   background: transparent;
-  border-radius: 6px;
+  border-radius: var(--ch-radius);
 }
 
 .commandMenuResults button[data-active] {
@@ -116,7 +116,7 @@
 .commandMenuName small {
   overflow: hidden;
   color: var(--ch-accent-strong);
-  font-size: 10px;
+  font-size: 11px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }

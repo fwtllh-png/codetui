@@ -19,7 +19,7 @@
   color: var(--ch-text);
   background: var(--ch-panel-raised);
   border: 1px solid var(--ch-border-strong);
-  border-radius: 8px;
+  border-radius: var(--ch-radius-control);
   box-shadow: var(--ch-shadow);
 }
 
@@ -40,7 +40,7 @@
   padding: 0 10px;
   background: var(--ch-panel);
   border: 1px solid var(--ch-border);
-  border-radius: 6px;
+  border-radius: var(--ch-radius);
 }
 
 .conversationNavigatorHeader label:focus-within {
@@ -98,7 +98,7 @@
   flex: 0 0 auto;
   color: var(--ch-text-secondary);
   background: transparent;
-  border-radius: 5px;
+  border-radius: var(--ch-radius);
   font-size: 11px;
 }
 
@@ -127,7 +127,7 @@
   color: var(--ch-text);
   text-align: left;
   background: transparent;
-  border-radius: 6px;
+  border-radius: var(--ch-radius);
 }
 
 .conversationNavigatorResults > button[data-active] {
@@ -146,7 +146,7 @@
   place-items: center;
   color: var(--ch-text-secondary);
   background: var(--ch-panel-subtle);
-  border-radius: 5px;
+  border-radius: var(--ch-radius);
 }
 
 .conversationNavigatorIcon[data-kind="question"] {
@@ -215,7 +215,7 @@
   padding: 0 8px;
   color: var(--ch-accent-strong);
   background: transparent;
-  border-radius: 5px;
+  border-radius: var(--ch-radius);
   font-size: 11px;
 }
 

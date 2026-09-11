@@ -18,6 +18,9 @@ type runtimeSink struct {
 }
 
 func (s *runtimeSink) Emit(data protocol.EventData) error {
+	if message, ok := data.(*protocol.CommentaryCompletedData); ok {
+		return s.EmitStable(eventhub.CommentaryEventID(message.MessageID), message)
+	}
 	switch payload := s.operation.Payload.(type) {
 	case *protocol.StartTurnPayload:
 		if started, ok := data.(*protocol.TurnStartedData); ok &&

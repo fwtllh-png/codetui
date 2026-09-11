@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/fwtllh-png/QCode/internal/adapter/provider"
@@ -38,15 +37,7 @@ func TestObservationGateRequiresWindowAfterSearchHit(t *testing.T) {
 			}},
 		}},
 	)
-	blocked := engine.observationGate(call, false)
-	if blocked == nil || !blocked.IsError ||
-		blocked.Metadata["error_category"] != "located_site_window_required" ||
-		blocked.Metadata["required_action"] != "file_read" ||
-		blocked.Metadata["start_line"] != 412 ||
-		!strings.Contains(
-			blocked.Content,
-			`{"path":"paxos_core.cpp","start_line":412}`,
-		) {
+	if blocked := engine.observationGate(call, false); blocked != nil {
 		t.Fatalf("located file_read without start_line = %+v", blocked)
 	}
 
@@ -74,28 +65,19 @@ func TestObservationGateRequiresWindowAfterSearchHit(t *testing.T) {
 		Name:      "file_read",
 		Arguments: string(absoluteArgs),
 	}
-	if got := engine.observationGate(absolute, false); got == nil {
-		t.Fatal("absolute located file_read without start_line allowed")
+	if got := engine.observationGate(absolute, false); got != nil {
+		t.Fatalf("absolute located file_read blocked: %+v", got)
 	}
 }
 
-func TestObservationGateRequiresWindowInFinishOnly(t *testing.T) {
+func TestObservationGateAdmitsUnwindowedReadInFinishOnly(t *testing.T) {
 	engine := evidenceEngine(t)
 	call := provider.ToolCall{
 		Name:      "file_read",
 		Arguments: `{"path":"types.h"}`,
 	}
-	blocked := engine.observationGate(call, true)
-	if blocked == nil || !blocked.IsError ||
-		blocked.Metadata["error_category"] != "located_site_window_required" {
+	if blocked := engine.observationGate(call, true); blocked != nil {
 		t.Fatalf("finish-only file_read without start_line = %+v", blocked)
-	}
-	if blocked.Metadata["start_line"] != 1 ||
-		!strings.Contains(
-			blocked.Content,
-			`{"path":"types.h","start_line":1}`,
-		) {
-		t.Fatalf("finish-only retry window = %+v", blocked)
 	}
 	windowed := provider.ToolCall{
 		Name:      "file_read",
@@ -311,7 +293,7 @@ func TestObservationGateAllowsReadWhenWindowUncovered(t *testing.T) {
 	}
 }
 
-func TestObservationGateRejectsGitPatrolOnContinue(t *testing.T) {
+func TestObservationGateAdmitsGitPatrolOnContinue(t *testing.T) {
 	engine := evidenceEngine(t)
 	kernel, err := turnkernel.NewRuntimeKernel(
 		turnkernel.KernelIdentity{
@@ -345,10 +327,7 @@ func TestObservationGateRejectsGitPatrolOnContinue(t *testing.T) {
 	engine.admissionKernel = kernel
 	before := engine.progressSignature(kernel)
 	for _, name := range []string{"git_status", "git_diff"} {
-		blocked := engine.observationGate(provider.ToolCall{Name: name}, false)
-		if blocked == nil || !blocked.IsError ||
-			blocked.Metadata["error_category"] != "work_item_git_patrol_refused" ||
-			blocked.Metadata["retry_original"] != false {
+		if blocked := engine.observationGate(provider.ToolCall{Name: name}, false); blocked != nil {
 			t.Fatalf("%s patrol = %+v", name, blocked)
 		}
 	}
@@ -377,11 +356,10 @@ func TestLocatedReadLineComesFromEvidenceLineHits(t *testing.T) {
 	if !found || line != 127 {
 		t.Fatalf("located read line = %d, %t", line, found)
 	}
-	blocked := engine.observationGate(provider.ToolCall{
+	if blocked := engine.observationGate(provider.ToolCall{
 		Name:      "file_read",
 		Arguments: `{"path":"paxos_core.cpp"}`,
-	}, false)
-	if blocked == nil || !blocked.IsError {
+	}, false); blocked != nil {
 		t.Fatalf("evidence-located file_read = %+v", blocked)
 	}
 }

@@ -7,23 +7,13 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"github.com/fwtllh-png/QCode/internal/runtime/protocol"
 	"path/filepath"
-	"regexp"
 	"strings"
-	"unicode"
-	"unicode/utf8"
+
+	"github.com/fwtllh-png/QCode/internal/runtime/protocol"
 )
 
-const (
-	defaultSessionTitle     = "New Chat"
-	sessionTitleMaxWords    = 5
-	sessionTitleMaxUTF8Byte = 48
-)
-
-var sessionTitleEscapeSequence = regexp.MustCompile(
-	`(?:\x1b\][^\x07]*(?:\x07|\x1b\\)|\x1b\[[0-?]*[ -/]*[@-~]|\x1b[@-_])`,
-)
+const defaultSessionTitle = "New Chat"
 
 type sessionCreateStore interface {
 	CreateLifecycle(
@@ -95,8 +85,10 @@ func (r *SessionService) CreateSession(
 		)
 	}
 	request.Title = strings.TrimSpace(request.Title)
+	titleSource := protocol.SessionTitleManual
 	if request.Title == "" {
 		request.Title = defaultSessionTitle
+		titleSource = protocol.SessionTitleDefault
 	}
 	request.WorkspaceRoot = strings.TrimSpace(request.WorkspaceRoot)
 	if request.WorkspaceRoot == "" {
@@ -192,6 +184,7 @@ func (r *SessionService) CreateSession(
 		WorkspaceLabel: request.WorkspaceLabel,
 		ThreadID:       threadID,
 		Title:          request.Title,
+		TitleSource:    titleSource,
 		Provider:       request.Provider,
 		Model:          request.Model,
 		Isolation:      request.Isolation,
@@ -259,8 +252,11 @@ func (r *SessionService) existingCreateBinding(
 	if err != nil {
 		return SessionBinding{}, false
 	}
+	titleMatches := summary.Title == request.Title ||
+		(request.Title == defaultSessionTitle &&
+			(summary.TitleSource == protocol.SessionTitleTemporary || summary.TitleSource == protocol.SessionTitleAuto))
 	if !sameWorkspaceRoot(summary.WorkspaceRoot, request.WorkspaceRoot) ||
-		summary.Title != request.Title ||
+		!titleMatches ||
 		summary.Isolation != request.Isolation ||
 		summary.Provider != request.Provider ||
 		summary.Model != request.Model {
@@ -548,30 +544,8 @@ func (r *OperationService) SubmitForSession(
 	); err != nil {
 		return OperationReceipt{}, err
 	}
-	if start, ok := request.Payload.(*protocol.StartTurnPayload); ok &&
-		summary.Title == defaultSessionTitle &&
-		summary.LatestSequence == 0 {
-		prompt := start.DisplayPrompt
-		if prompt == "" {
-			prompt = start.Prompt
-		}
-		if title := promptSessionTitle(prompt); title != "" {
-			titlePatch := protocol.SessionLifecyclePatch{Title: &title}
-			if _, titleErr := r.sessionLifecycle.UpdateLifecycle(
-				ctx,
-				request.SessionID,
-				summary.Revision,
-				titlePatch,
-			); titleErr != nil && r.logger != nil {
-				r.logger.Warn(
-					"automatic session title update failed",
-					"session_id",
-					request.SessionID,
-					"error",
-					titleErr,
-				)
-			}
-		}
+	if start, ok := request.Payload.(*protocol.StartTurnPayload); ok {
+		r.prepareSessionTitle(ctx, summary, operation, start)
 	}
 	if fork, ok := request.Payload.(*protocol.ForkThreadPayload); ok {
 		if err := r.BindThreadSession(
@@ -589,45 +563,6 @@ func (r *OperationService) SubmitForSession(
 		ItemID:      itemID,
 		Accepted:    true,
 	}, nil
-}
-
-func promptSessionTitle(prompt string) string {
-	prompt = sessionTitleEscapeSequence.ReplaceAllString(prompt, "")
-	clean := strings.Map(func(value rune) rune {
-		if unicode.IsSpace(value) {
-			return ' '
-		}
-		if unicode.IsControl(value) || unicode.Is(unicode.Cf, value) {
-			return -1
-		}
-		return value
-	}, prompt)
-	clean = strings.Join(strings.Fields(clean), " ")
-	for _, prefix := range []string{"请帮我", "请你", "帮我", "请"} {
-		if strings.HasPrefix(clean, prefix) {
-			clean = strings.TrimSpace(strings.TrimPrefix(clean, prefix))
-			break
-		}
-	}
-	if end := strings.IndexAny(clean, "。！？!?；;"); end >= 0 {
-		clean = strings.TrimSpace(clean[:end])
-	}
-	words := strings.Fields(clean)
-	if len(words) > sessionTitleMaxWords {
-		clean = strings.Join(words[:sessionTitleMaxWords], " ")
-	}
-	if len(clean) <= sessionTitleMaxUTF8Byte {
-		return clean
-	}
-	var title strings.Builder
-	title.Grow(sessionTitleMaxUTF8Byte)
-	for _, value := range clean {
-		if title.Len()+utf8.RuneLen(value) > sessionTitleMaxUTF8Byte {
-			break
-		}
-		title.WriteRune(value)
-	}
-	return strings.TrimSpace(title.String())
 }
 
 func bindingFromSeed(seed protocol.SessionCreateSeed) SessionBinding {
@@ -763,6 +698,9 @@ func (r *SessionService) UpdateSessionLifecycle(
 ) (protocol.SessionLifecycleUpdate, error) {
 	r.mutationMu.Lock()
 	defer r.mutationMu.Unlock()
+	if r.OperationService.hasWorkspaceOperation() {
+		return protocol.SessionLifecycleUpdate{}, retryableProblem(protocol.CodeConflict, "a Workspace Git operation is active")
+	}
 	if r.sessionLifecycle == nil {
 		return protocol.SessionLifecycleUpdate{}, runtimeProblem(protocol.CodeUnavailable, "session lifecycle is unavailable", nil)
 	}
@@ -817,6 +755,9 @@ func (r *SessionService) deleteSession(
 ) (protocol.SessionDeleteResult, error) {
 	r.mutationMu.Lock()
 	defer r.mutationMu.Unlock()
+	if r.OperationService.hasWorkspaceOperation() {
+		return protocol.SessionDeleteResult{}, retryableProblem(protocol.CodeConflict, "a Workspace Git operation is active")
+	}
 	if r.sessionLifecycle == nil {
 		return protocol.SessionDeleteResult{}, runtimeProblem(protocol.CodeUnavailable, "session lifecycle is unavailable", nil)
 	}

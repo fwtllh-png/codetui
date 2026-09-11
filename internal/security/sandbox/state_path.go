@@ -21,22 +21,14 @@ type StateLayout struct {
 // ExternalStateDirectory resolves a Runtime state directory and rejects any
 // overlap with the untrusted Workspace before callers create state files.
 func ExternalStateDirectory(workspace, stateDirectory string) (string, error) {
-	if strings.TrimSpace(stateDirectory) == "" {
-		return "", errors.New("Runtime state directory is required")
-	}
 	workspace, err := canonicalDirectory(workspace)
 	if err != nil {
 		return "", fmt.Errorf("canonicalize Workspace for state directory: %w", err)
 	}
-	stateDirectory, err = filepath.Abs(stateDirectory)
+	stateDirectory, err = CanonicalStateDirectory(stateDirectory)
 	if err != nil {
-		return "", fmt.Errorf("resolve Runtime state directory: %w", err)
+		return "", err
 	}
-	stateDirectory, err = evalSymlinksAllowMissing(stateDirectory)
-	if err != nil {
-		return "", fmt.Errorf("resolve Runtime state directory links: %w", err)
-	}
-	stateDirectory = filepath.Clean(stateDirectory)
 	if pathContains(workspace, stateDirectory) ||
 		pathContains(stateDirectory, workspace) {
 		return "", errors.New(
@@ -44,6 +36,23 @@ func ExternalStateDirectory(workspace, stateDirectory string) (string, error) {
 		)
 	}
 	return stateDirectory, nil
+}
+
+// CanonicalStateDirectory resolves the Supervisor state root before any
+// Workspace exists. Each later Workspace still requires an overlap check.
+func CanonicalStateDirectory(stateDirectory string) (string, error) {
+	if strings.TrimSpace(stateDirectory) == "" {
+		return "", errors.New("Runtime state directory is required")
+	}
+	stateDirectory, err := filepath.Abs(stateDirectory)
+	if err != nil {
+		return "", fmt.Errorf("resolve Runtime state directory: %w", err)
+	}
+	stateDirectory, err = evalSymlinksAllowMissing(stateDirectory)
+	if err != nil {
+		return "", fmt.Errorf("resolve Runtime state directory links: %w", err)
+	}
+	return filepath.Clean(stateDirectory), nil
 }
 
 func PrepareStateLayout(

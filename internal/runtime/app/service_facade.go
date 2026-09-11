@@ -12,7 +12,9 @@ import (
 
 type SessionService struct {
 	*Runtime
-	mutationMu sync.Mutex
+	mutationMu   sync.Mutex
+	titleWorkers sync.WaitGroup
+	titleJobs    map[string]sessionTitleJob
 }
 type AgentPresetService struct{ *Runtime }
 type ArtifactService = artifact.Service
@@ -75,19 +77,24 @@ func installRuntimeServices(runtime *Runtime, operationBuffer int) {
 type OperationService struct {
 	*Runtime
 
-	mu           sync.Mutex
-	operations   chan acceptedOperation
-	processed    uint64
-	accepted     map[protocol.OperationID]PendingOperation
-	acceptedKeys map[string]protocol.OperationID
-	committed    map[protocol.OperationID]PendingOperation
-	accepting    bool
+	mu                 sync.Mutex
+	operations         chan acceptedOperation
+	processed          uint64
+	accepted           map[protocol.OperationID]PendingOperation
+	acceptedKeys       map[string]protocol.OperationID
+	committed          map[protocol.OperationID]PendingOperation
+	accepting          bool
+	workspaceOperation bool
 }
 
 func (s *OperationService) snapshot() (processed uint64, pending int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.processed, len(s.accepted)
+	pending = len(s.accepted)
+	if s.workspaceOperation {
+		pending++
+	}
+	return s.processed, pending
 }
 
 func (s *OperationService) hasPendingSession(sessionID string) bool {
@@ -99,6 +106,12 @@ func (s *OperationService) hasPendingSession(sessionID string) bool {
 		}
 	}
 	return false
+}
+
+func (s *OperationService) hasWorkspaceOperation() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.workspaceOperation
 }
 
 func (s *OperationService) pendingOperations() []PendingOperation {

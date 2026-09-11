@@ -2,7 +2,7 @@ GO ?= go
 NPM ?= npm
 BINARY := bin/qcode
 MODULE := github.com/fwtllh-png/QCode
-START_WORKSPACE ?= $(CURDIR)
+START_WORKSPACE ?=
 PREFIX ?= $(HOME)/.local
 BINDIR ?= $(PREFIX)/bin
 INSTALL_BINARY := $(BINDIR)/qcode
@@ -203,7 +203,7 @@ build: web-build
 start:
 	$(MAKE) web-install
 	$(MAKE) build
-	./$(BINARY) --workspace '$(START_WORKSPACE)' --enable-tools --posture suggest --replace-owner --open
+	./$(BINARY) $(if $(strip $(START_WORKSPACE)),--workspace '$(START_WORKSPACE)') --enable-tools --posture suggest --replace-owner --open
 
 install:
 	$(MAKE) web-install
@@ -448,7 +448,7 @@ benchmark-v2: benchmark-v2-check bench
 		./internal/host/runtimeapi/web
 	$(NPM) --prefix web run test:e2e -- visual.spec.ts --grep 'reloads|frozen'
 	$(NPM) --prefix web test -- --testNamePattern \
-		'windows 500-turn transcripts to 200 projected rows with older and newer navigation'
+		'windows 500-turn transcripts to 200 projected rows with automatic history scrolling'
 
 # catalog-bench tracks the M4 dynamic tool catalog's time, allocation, and
 # prompt-size baseline at 100/500/1000 tools.

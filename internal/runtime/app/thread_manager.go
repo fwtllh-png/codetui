@@ -665,6 +665,19 @@ func (m *ThreadManager) PreparePostTurnNarrative(
 	return prepared, nil
 }
 
+func (m *ThreadManager) GenerateSessionTitle(
+	ctx context.Context, threadID protocol.ThreadID, identity, prompt string,
+) (agentengine.SessionTitleResult, error) {
+	adapter, err := m.forThread(threadID)
+	if err != nil {
+		return agentengine.SessionTitleResult{}, err
+	}
+	if adapter.Underlying() == nil {
+		return agentengine.SessionTitleResult{}, errors.New("session title engine is unavailable")
+	}
+	return adapter.Underlying().GenerateSessionTitle(ctx, identity, prompt)
+}
+
 func (m *ThreadManager) RestoreContext(
 	threadID protocol.ThreadID,
 	snapshot agentcontext.ContextSnapshot,

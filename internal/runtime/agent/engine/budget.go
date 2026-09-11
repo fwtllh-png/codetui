@@ -15,11 +15,15 @@ func (e *Engine) checkBudget(
 	outputReserve uint64,
 ) (uint64, error) {
 	route := e.activeRoute()
+	current := turnUsage
+	current.Add(stepUsage)
+	e.syncSessionTitleState(current)
+	sessionUsage, cost := e.accountedUsage()
 	request := agentcontext.BudgetRequest{
 		ContextTokens:  route.Model().Limits.ContextTokens,
 		EstimatedInput: estimatedInput, OutputReserve: outputReserve,
-		SessionUsage: e.usage, TurnUsage: turnUsage, StepUsage: stepUsage,
-		MaxTokens: e.options.Budget.MaxTokens, SpentCostUSD: e.costUSD,
+		SessionUsage: sessionUsage, TurnUsage: turnUsage, StepUsage: stepUsage,
+		MaxTokens: e.options.Budget.MaxTokens, SpentCostUSD: cost,
 		MaxCostUSD: e.options.Budget.MaxCostUSD, Pricing: route.Model().Pricing,
 		Scope: e.turnBudgetScope(),
 	}
@@ -49,9 +53,10 @@ func (e *Engine) economicAdmission(turnUsage, stepUsage provider.Usage,
 	currentOutput, finalizationOutput, remainingCalls uint64,
 ) contextview.EconomicAdmission {
 	capacity := e.contextCapacity()
+	sessionUsage, _ := e.accountedUsage()
 	return contextview.ResolveEconomicAdmission(contextview.EconomicAdmissionRequest{
 		HardInput: capacity.HardInputTokens, OperatorInput: e.autoCompactLimit(),
-		SessionUsage: e.usage, TurnUsage: turnUsage, StepUsage: stepUsage,
+		SessionUsage: sessionUsage, TurnUsage: turnUsage, StepUsage: stepUsage,
 		MaxSessionTokens: e.options.Budget.MaxTokens,
 		MaxTurnTokens:    e.options.Budget.MaxTurnTokens,
 		CurrentOutput:    currentOutput, FinalizationOutput: finalizationOutput,
@@ -100,5 +105,5 @@ func (e *Engine) budgetConvergence(turnUsed uint64) (provider.Message, bool) {
 func (e *Engine) Usage() (provider.Usage, float64) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	return e.usage, e.costUSD
+	return e.accountedUsage()
 }

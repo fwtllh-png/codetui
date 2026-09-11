@@ -96,11 +96,10 @@ func CompletionDeclarationFeedback(turn uint64) provider.Message {
 
 func CompletionFeedback(turn uint64) provider.Message {
 	return feedback(turn, `[completion_required]
-Your previous model sample did not select a structured Turn state. Do not stop
-at reasoning or narration of future work. Call the required Tool now, call
-request_user_input if available and genuinely blocked on the user, or call
-turn_complete. For status=complete, put the exact user-facing final response in
-summary; ordinary assistant text cannot complete this Turn.`)
+Your previous model sample did not produce a user-facing answer. Continue with
+the next required tool, call request_user_input if available and genuinely
+blocked on the user, or stop calling tools and write the final answer as
+ordinary assistant text. turn_complete is optional.`)
 }
 
 func ToolFailureCompletionFeedback(turn uint64) provider.Message {
@@ -122,15 +121,12 @@ func NoProgressFeedback(
 			"steps_without_structured_progress=%d\n"+
 			"stage=%s\n"+
 			"required_action=converge\n"+
-			"Stop broad exploration and repeated inventory. Execute the smallest "+
-			"coherent workspace change now, then verify that change once. "+
-			"Re-running a check that already failed without a code change "+
-			"cannot change its outcome. "+
-			"A workspace-change turn advances only through observed mutations, "+
-			"completed plan steps, verification, or an accepted completion. "+
-			"Rewriting the same plan or retrying a rejected complete is not "+
-			"progress. If the remaining work cannot be completed, call "+
-			"turn_complete with status=incomplete and concrete pending_actions.",
+			"The last model samples repeated the same tool-call identity. "+
+			"Do not resubmit that exact call. Change the arguments, pick a "+
+			"different tool, or call turn_complete. Distinct edits or checks "+
+			"on already-known paths are still progress. If the work cannot "+
+			"continue, call turn_complete with status=incomplete and concrete "+
+			"pending_actions.",
 		samples,
 		stage,
 	))

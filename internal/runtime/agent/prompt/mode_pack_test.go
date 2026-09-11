@@ -30,8 +30,8 @@ func TestModeInstructionPackDiffersByMode(t *testing.T) {
 	} {
 		if !strings.Contains(pack, "request_user_input") ||
 			!strings.Contains(pack, "ordinary assistant text") ||
-			!strings.Contains(pack, "cannot replace") ||
-			!strings.Contains(pack, "turn_complete") ||
+			!strings.Contains(pack, "stop calling tools") ||
+			!strings.Contains(pack, "turn_complete is optional") ||
 			!strings.Contains(pack, "Resolve facts available through tools") ||
 			!strings.Contains(pack, "already loaded facts") ||
 			!strings.Contains(pack, "git_status or git_diff on Continue") ||

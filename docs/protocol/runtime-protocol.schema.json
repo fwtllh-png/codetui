@@ -850,6 +850,8 @@
           "enum": [
             "turn.started",
             "output.delta",
+            "commentary.completed",
+            "session.title.updated",
             "reasoning.delta",
             "reasoning.completed",
             "search.result",
@@ -1964,6 +1966,12 @@
             "title": {
               "type": "string"
             },
+            "title_revision": {
+              "type": "integer"
+            },
+            "title_source": {
+              "type": "string"
+            },
             "total_tokens": {
               "type": "integer"
             },
@@ -2117,6 +2125,12 @@
               "title": {
                 "type": "string"
               },
+              "title_revision": {
+                "type": "integer"
+              },
+              "title_source": {
+                "type": "string"
+              },
               "total_tokens": {
                 "type": "integer"
               },
@@ -2201,6 +2215,13 @@
             },
             "profile_revision": {
               "type": "integer"
+            },
+            "purpose": {
+              "type": "string",
+              "enum": [
+                "execution",
+                "deliverable"
+              ]
             },
             "session_id": {
               "type": "string"
@@ -4515,6 +4536,33 @@
       ],
       "additionalProperties": false
     },
+    "commentary.completed": {
+      "type": "object",
+      "properties": {
+        "call_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "message_id": {
+          "type": "string"
+        },
+        "sample_id": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "call_ids",
+        "message_id",
+        "sample_id",
+        "text"
+      ],
+      "additionalProperties": false
+    },
     "diagnostics.result": {
       "type": "object",
       "properties": {
@@ -4888,6 +4936,13 @@
         "profile_revision": {
           "type": "integer"
         },
+        "purpose": {
+          "type": "string",
+          "enum": [
+            "execution",
+            "deliverable"
+          ]
+        },
         "status": {
           "type": "string"
         }
@@ -5087,6 +5142,30 @@
       "required": [
         "query",
         "sources"
+      ],
+      "additionalProperties": false
+    },
+    "session.title.updated": {
+      "type": "object",
+      "properties": {
+        "session_id": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "title_revision": {
+          "type": "integer"
+        },
+        "title_source": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "session_id",
+        "title",
+        "title_revision",
+        "title_source"
       ],
       "additionalProperties": false
     },
@@ -8761,6 +8840,13 @@
       "correlation": "call",
       "terminal": false
     },
+    "commentary.completed": {
+      "class": "stream",
+      "item_owner": "turn",
+      "durability": "retained",
+      "correlation": "sample",
+      "terminal": false
+    },
     "diagnostics.result": {
       "class": "evidence",
       "item_owner": "turn",
@@ -8850,6 +8936,13 @@
       "item_owner": "turn",
       "durability": "retained",
       "correlation": "turn",
+      "terminal": false
+    },
+    "session.title.updated": {
+      "class": "audit",
+      "item_owner": "turn",
+      "durability": "retained",
+      "correlation": "none",
       "terminal": false
     },
     "thread.compacted": {

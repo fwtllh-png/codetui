@@ -128,13 +128,6 @@ func applyCompletion(
 		candidate.OutputMode != "exact" &&
 		candidate.OutputMode != "preserve_provisional":
 		decision.Reason = "invalid_output_mode"
-	case candidate.Status == "complete" && candidate.PlanOpenSteps != 0 &&
-		(current.Intent == protocol.TurnIntentWorkspaceChange ||
-			current.MutationRevision != 0):
-		// Open plan steps block completion only when this Turn started
-		// executing the plan. An answer/plan Turn that only delivered the
-		// plan may finish while remaining steps stay pending for the user.
-		decision.Reason = "plan_progress_incomplete"
 	case candidate.Status == "incomplete" &&
 		strings.TrimSpace(candidate.Summary) != "" &&
 		len(candidate.PendingActions) != 0 &&

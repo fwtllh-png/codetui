@@ -367,6 +367,49 @@ func ParseFileReadWindow(raw string) (string, int, bool) {
 	return path, input.StartLine, path != ""
 }
 
+// EmptySampleIdentity names a Sample that proposed no tool calls. It is a
+// real identity so a later ObserveProgress does not inherit the previous
+// tool batch through PendingIdentity.
+const EmptySampleIdentity = "none"
+
+// FormatToolCallsIdentity names one Sample's tool batch. Identical name and
+// canonical arguments repeat a stall; distinct arguments do not.
+func FormatToolCallsIdentity(calls []ToolCallState) string {
+	if len(calls) == 0 {
+		return EmptySampleIdentity
+	}
+	parts := make([]string, 0, len(calls))
+	for _, call := range calls {
+		name := strings.TrimSpace(call.Name)
+		if name == "" {
+			continue
+		}
+		parts = append(parts, name+"\n"+canonicalizeToolArguments(call.Arguments))
+	}
+	if len(parts) == 0 {
+		return EmptySampleIdentity
+	}
+	slices.Sort(parts)
+	sum := sha256.Sum256([]byte(strings.Join(parts, "\x1e")))
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+func canonicalizeToolArguments(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	var value any
+	if err := json.Unmarshal([]byte(raw), &value); err != nil {
+		return raw
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return raw
+	}
+	return string(encoded)
+}
+
 func FormatWorkItemSignature(
 	state State,
 	completedPlanSteps int,

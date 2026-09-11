@@ -238,6 +238,11 @@ func (r *SessionService) RestoreSessionProfile(
 	}
 	r.active.mu.Lock()
 	defer r.active.mu.Unlock()
+	if r.active.workspaceExclusive {
+		return protocol.SessionProfileSnapshot{}, retryableProblem(
+			protocol.CodeConflict, "session profile cannot change during a Workspace Git operation",
+		)
+	}
 	if _, active := r.active.byThread[threadID]; active {
 		if r.active.profiles[threadID] == snapshot.Profile.Revision {
 			return snapshot, nil
@@ -289,6 +294,11 @@ func (r *SessionService) UpdateSessionProfile(
 	}
 	r.active.mu.Lock()
 	defer r.active.mu.Unlock()
+	if r.active.workspaceExclusive {
+		return protocol.SessionProfileUpdateResult{}, retryableProblem(
+			protocol.CodeConflict, "session profile cannot change during a Workspace Git operation",
+		)
+	}
 	if _, active := r.active.byThread[threadID]; active {
 		return protocol.SessionProfileUpdateResult{}, retryableProblem(
 			protocol.CodeConflict,

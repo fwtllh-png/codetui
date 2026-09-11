@@ -1,0 +1,7 @@
+data: {"choices":[{"delta":{"role":"assistant"},"finish_reason":null}]}
+
+data: {"choices":[{"delta":{"content":"{\"title\":\"Improve session title summaries\"}"},"finish_reason":null}]}
+
+data: {"choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":{{request_input_tokens}},"completion_tokens":9}}
+
+data: [DONE]

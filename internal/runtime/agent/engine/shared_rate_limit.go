@@ -16,11 +16,15 @@ type SharedRateLimit struct {
 	init sync.Once
 	mu   sync.Mutex
 
-	limit         int
-	token         chan struct{}
-	retries       uint32
-	waited        time.Duration
-	cooldownUntil time.Time
+	limit          int
+	token          chan struct{}
+	retries        uint32
+	waited         time.Duration
+	cooldownUntil  time.Time
+	foreground     int
+	changed        chan struct{}
+	background     map[uint64]context.CancelFunc
+	nextBackground uint64
 }
 
 // NewSharedRateLimit derives the gate capacity from the operator-declared
@@ -115,19 +119,132 @@ func (s *SharedRateLimit) Acquire(ctx context.Context) (func(), error) {
 		return func() {}, nil
 	}
 	s.ensure()
+	s.mu.Lock()
+	s.foreground++
+	for _, cancel := range s.background {
+		cancel()
+	}
+	s.mu.Unlock()
 	select {
 	case <-ctx.Done():
+		s.finishForeground()
 		return nil, ctx.Err()
 	case <-s.token:
 	}
 	if err := s.waitCooldown(ctx); err != nil {
 		s.token <- struct{}{}
+		s.finishForeground()
 		return nil, err
 	}
 	var once sync.Once
 	return func() {
-		once.Do(func() { s.token <- struct{}{} })
+		once.Do(func() {
+			s.token <- struct{}{}
+			s.finishForeground()
+		})
 	}, nil
+}
+
+// AcquireBackground yields to both queued and active foreground work. A new
+// foreground request cancels the optional sample before taking its slot.
+func (s *SharedRateLimit) AcquireBackground(ctx context.Context) (context.Context, func(), error) {
+	if s == nil {
+		return ctx, func() {}, ctx.Err()
+	}
+	s.ensure()
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, nil, err
+		}
+		s.mu.Lock()
+		if s.foreground != 0 || len(s.token) == 0 {
+			if s.changed == nil {
+				s.changed = make(chan struct{})
+			}
+			changed := s.changed
+			s.mu.Unlock()
+			select {
+			case <-ctx.Done():
+				return nil, nil, ctx.Err()
+			case <-changed:
+				continue
+			}
+		}
+		delay := time.Until(s.cooldownUntil)
+		if delay > 0 {
+			s.mu.Unlock()
+			if err := waitRetryDelay(ctx, delay); err != nil {
+				return nil, nil, err
+			}
+			continue
+		}
+		<-s.token
+		backgroundCtx, cancel := context.WithCancel(ctx)
+		s.nextBackground++
+		id := s.nextBackground
+		if s.background == nil {
+			s.background = make(map[uint64]context.CancelFunc)
+		}
+		s.background[id] = cancel
+		s.mu.Unlock()
+		var once sync.Once
+		return backgroundCtx, func() {
+			once.Do(func() {
+				cancel()
+				s.mu.Lock()
+				delete(s.background, id)
+				s.token <- struct{}{}
+				s.notifyWaiters()
+				s.mu.Unlock()
+			})
+		}, nil
+	}
+}
+
+// BeginForegroundTurn cancels and settles optional samples before the engine
+// freezes its next budget. It does not hold a provider slot during tool work.
+func (s *SharedRateLimit) BeginForegroundTurn(ctx context.Context) func() {
+	if s == nil || ctx.Err() != nil {
+		return func() {}
+	}
+	s.ensure()
+	s.mu.Lock()
+	s.foreground++
+	for _, cancel := range s.background {
+		cancel()
+	}
+	for len(s.background) != 0 {
+		if s.changed == nil {
+			s.changed = make(chan struct{})
+		}
+		changed := s.changed
+		s.mu.Unlock()
+		select {
+		case <-ctx.Done():
+			s.finishForeground()
+			return func() {}
+		case <-changed:
+		}
+		s.mu.Lock()
+	}
+	s.mu.Unlock()
+	var once sync.Once
+	return func() { once.Do(s.finishForeground) }
+}
+
+func (s *SharedRateLimit) notifyWaiters() {
+	if s.changed == nil {
+		return
+	}
+	close(s.changed)
+	s.changed = nil
+}
+
+func (s *SharedRateLimit) finishForeground() {
+	s.mu.Lock()
+	s.foreground--
+	s.notifyWaiters()
+	s.mu.Unlock()
 }
 
 func (s *SharedRateLimit) waitCooldown(ctx context.Context) error {

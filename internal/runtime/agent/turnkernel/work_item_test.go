@@ -1,6 +1,8 @@
 package turnkernel
 
 import (
+	"fmt"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -8,6 +10,55 @@ import (
 	"github.com/fwtllh-png/QCode/internal/adapter/tool"
 	"github.com/fwtllh-png/QCode/internal/runtime/protocol"
 )
+
+func TestRepeatedToolCallsProposedIncrementsNoProgress(t *testing.T) {
+	state := startSampling(t, protocol.TurnIntentAnswer)
+	state.Policy.Convergence = ConvergencePolicyForStepLimit(64)
+	signature := FormatProgressSignature(state, 0, false)
+	state = apply(t, state, ObserveProgress{
+		Signature: signature, CompletedSamples: 0,
+	}).State
+	for index := range 3 {
+		state = apply(t, state, ToolCallsProposed{
+			Calls: []ToolCallState{{
+				ID:        fmt.Sprintf("echo-%d", index),
+				Name:      "echo",
+				Arguments: `{"text":"read"}`,
+			}},
+		}).State
+		state = apply(t, state, ToolResultReceived{
+			CallID: fmt.Sprintf("echo-%d", index),
+		}).State
+		state = apply(t, state, ObserveProgress{
+			Signature:        FormatProgressSignature(state, 0, false),
+			CompletedSamples: uint32(index + 1),
+		}).State
+	}
+	if state.Progress.PendingIdentity == "" {
+		t.Fatal("pending tool identity was not recorded")
+	}
+	if state.Progress.NoProgressSamples != 3 {
+		t.Fatalf("repeated calls = %+v, want no_progress=3", state.Progress)
+	}
+}
+
+func TestFormatToolCallsIdentityIgnoresJSONWhitespace(t *testing.T) {
+	left := FormatToolCallsIdentity([]ToolCallState{{
+		Name: "exec_command", Arguments: `{"command":"node --test","cwd":"."}`,
+	}})
+	right := FormatToolCallsIdentity([]ToolCallState{{
+		Name: "exec_command", Arguments: `{ "cwd" : ".", "command" : "node --test" }`,
+	}})
+	if left == "" || left != right {
+		t.Fatalf("canonical identity mismatch: %q vs %q", left, right)
+	}
+	other := FormatToolCallsIdentity([]ToolCallState{{
+		Name: "exec_command", Arguments: `{"command":"node --test --test-name=foo"}`,
+	}})
+	if other == left {
+		t.Fatal("distinct arguments shared identity")
+	}
+}
 
 func TestSecondFullReadDoesNotChangeWorkItemSignature(t *testing.T) {
 	state := startSampling(t, protocol.TurnIntentAnswer)
@@ -85,7 +136,9 @@ func TestAnswerTurnKnownWorkItemFinishOnlyAtImplementLease(t *testing.T) {
 	}).State
 	signature := FormatProgressSignature(state, 0, false)
 	state = apply(t, state, ObserveProgress{
-		Signature: signature, CompletedSamples: 0,
+		Signature:      signature,
+		SampleIdentity: "exec_command\nnode --test",
+		CompletedSamples: 0,
 	}).State
 	for _, test := range []struct {
 		samples uint32
@@ -96,7 +149,9 @@ func TestAnswerTurnKnownWorkItemFinishOnlyAtImplementLease(t *testing.T) {
 		{samples: 6, want: ProgressStageFinishOnly},
 	} {
 		state = apply(t, state, ObserveProgress{
-			Signature: signature, CompletedSamples: test.samples,
+			Signature:        signature,
+			SampleIdentity:   "exec_command\nnode --test",
+			CompletedSamples: test.samples,
 		}).State
 		if state.Progress.Stage != test.want ||
 			state.Progress.NoProgressSamples != test.samples {
@@ -107,6 +162,66 @@ func TestAnswerTurnKnownWorkItemFinishOnlyAtImplementLease(t *testing.T) {
 				test.want,
 			)
 		}
+	}
+}
+
+func TestDistinctToolIdentityDoesNotConsumeImplementLease(t *testing.T) {
+	state := startSampling(t, protocol.TurnIntentAnswer)
+	state.Policy.Convergence = ConvergencePolicyForStepLimit(64)
+	state.Policy.ImplementNoProgressSamples = 6
+	state = apply(t, state, BindWorkItem{
+		Goal: "enrich the chapter",
+		KnownReads: map[string]WorkItemRead{
+			"readme.md": {Window: "full"},
+		},
+	}).State
+	signature := FormatProgressSignature(state, 0, false)
+	state = apply(t, state, ObserveProgress{
+		Signature: signature, CompletedSamples: 0,
+	}).State
+	for samples := uint32(1); samples <= 8; samples++ {
+		state = apply(t, state, ObserveProgress{
+			Signature:        signature,
+			SampleIdentity:   "exec_command\ncheck-" + strconv.FormatUint(uint64(samples), 10),
+			CompletedSamples: samples,
+		}).State
+		want := uint32(0)
+		if samples == 1 {
+			want = 1
+		}
+		if state.Progress.Stage != ProgressStageNone ||
+			state.Progress.NoProgressSamples != want {
+			t.Fatalf(
+				"distinct tool identity consumed lease: samples=%d progress=%+v",
+				samples,
+				state.Progress,
+			)
+		}
+	}
+}
+
+func TestKnownWorkItemWithoutRepeatedCallsKeepsMaxStepsLease(t *testing.T) {
+	state := startSampling(t, protocol.TurnIntentAnswer)
+	state.Policy.Convergence = ConvergencePolicyForStepLimit(64)
+	state.Policy.ImplementNoProgressSamples = 6
+	state = apply(t, state, BindWorkItem{
+		Goal: "read then write",
+		KnownReads: map[string]WorkItemRead{
+			"readme.md": {Window: "full"},
+		},
+	}).State
+	signature := FormatProgressSignature(state, 0, false)
+	state = apply(t, state, ObserveProgress{
+		Signature: signature, CompletedSamples: 0,
+	}).State
+	state = apply(t, state, ObserveProgress{
+		Signature: signature, CompletedSamples: 6,
+	}).State
+	if state.Progress.Stage != ProgressStageNone {
+		t.Fatalf(
+			"known work item without repeated calls used implement lease: %+v",
+			state.Progress,
+		)
 	}
 }
 
@@ -219,7 +334,9 @@ func TestImplementLeaseExhaustsAtLeasePlusRepairReserve(t *testing.T) {
 	}).State
 	signature := FormatProgressSignature(state, 0, false)
 	state = apply(t, state, ObserveProgress{
-		Signature: signature, CompletedSamples: 0,
+		Signature:      signature,
+		SampleIdentity: "file_read\nsocket_transport.cpp",
+		CompletedSamples: 0,
 	}).State
 	// Between finish-only and lease+repair-reserve the stage stays
 	// finish-only instead of trailing behind the 69-sample step lease.
@@ -232,7 +349,9 @@ func TestImplementLeaseExhaustsAtLeasePlusRepairReserve(t *testing.T) {
 		{samples: 11, want: ProgressStageExhausted},
 	} {
 		state = apply(t, state, ObserveProgress{
-			Signature: signature, CompletedSamples: test.samples,
+			Signature:        signature,
+			SampleIdentity:   "file_read\nsocket_transport.cpp",
+			CompletedSamples: test.samples,
 		}).State
 		if state.Progress.Stage != test.want {
 			t.Fatalf(
@@ -244,6 +363,34 @@ func TestImplementLeaseExhaustsAtLeasePlusRepairReserve(t *testing.T) {
 	if state.Convergence == nil ||
 		state.Convergence.Cause != ConvergenceNoProgress {
 		t.Fatalf("exhausted convergence = %+v", state.Convergence)
+	}
+}
+
+func TestNoProgressConvergenceKeepsRejectedCompletionSummary(t *testing.T) {
+	state := startSampling(t, protocol.TurnIntentAnswer)
+	state.Policy.Convergence = ConvergencePolicyForStepLimit(64)
+	state.Policy.ImplementNoProgressSamples = 6
+	state.Completion = &CompletionDecision{
+		Accepted: false,
+		Summary:  "已全面扩充 foundations",
+		Reason:   "incomplete_declaration",
+	}
+	signature := FormatProgressSignature(state, 0, false)
+	state = apply(t, state, ObserveProgress{
+		Signature:        signature,
+		SampleIdentity:   "exec_command\nnode --test",
+		CompletedSamples: 0,
+	}).State
+	state = apply(t, state, ObserveProgress{
+		Signature:        signature,
+		SampleIdentity:   "exec_command\nnode --test",
+		CompletedSamples: 11,
+	}).State
+	if state.Convergence == nil ||
+		state.Convergence.Cause != ConvergenceNoProgress ||
+		state.Convergence.Summary != "已全面扩充 foundations" ||
+		len(state.Convergence.PendingActions) != 1 {
+		t.Fatalf("convergence = %+v", state.Convergence)
 	}
 }
 
@@ -263,16 +410,22 @@ func TestImplementLeaseWithoutRepairReserveExhaustsAtLeasePlusOne(t *testing.T) 
 	}).State
 	signature := FormatProgressSignature(state, 0, false)
 	state = apply(t, state, ObserveProgress{
-		Signature: signature, CompletedSamples: 0,
+		Signature:      signature,
+		SampleIdentity: "file_read\nsocket_transport.cpp",
+		CompletedSamples: 0,
 	}).State
 	state = apply(t, state, ObserveProgress{
-		Signature: signature, CompletedSamples: 6,
+		Signature:        signature,
+		SampleIdentity:   "file_read\nsocket_transport.cpp",
+		CompletedSamples: 6,
 	}).State
 	if state.Progress.Stage != ProgressStageFinishOnly {
 		t.Fatalf("stage = %s, want finish_only", state.Progress.Stage)
 	}
 	state = apply(t, state, ObserveProgress{
-		Signature: signature, CompletedSamples: 7,
+		Signature:        signature,
+		SampleIdentity:   "file_read\nsocket_transport.cpp",
+		CompletedSamples: 7,
 	}).State
 	if state.Progress.Stage != ProgressStageExhausted {
 		t.Fatalf("stage = %s, want exhausted", state.Progress.Stage)

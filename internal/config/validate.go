@@ -209,7 +209,6 @@ func (s Snapshot) Validate() error {
 		maximum int
 	}{
 		{fieldCompactSemanticNarrativeMaxInputTokens, compaction.SemanticNarrativeMaxInputTokens, 64 << 20},
-		{fieldCompactSemanticNarrativeMaxOutputTokens, compaction.SemanticNarrativeMaxOutputTokens, 1 << 20},
 		{fieldCompactSemanticNarrativeMaxItems, compaction.SemanticNarrativeMaxItems, 1024},
 		{fieldCompactSemanticNarrativeItemMaxBytes, compaction.SemanticNarrativeItemMaxBytes, 64 << 10},
 		{fieldCompactOwnerDeltaMaxSegments, compaction.OwnerDeltaMaxSegments, 1024},
@@ -218,6 +217,11 @@ func (s Snapshot) Validate() error {
 		if err := checkRange(limit.field, limit.value, limit.maximum); err != nil {
 			return err
 		}
+	}
+	if compaction.SemanticNarrativeMaxOutputTokens < 0 ||
+		compaction.SemanticNarrativeMaxOutputTokens > 1<<20 {
+		return fieldError(fieldCompactSemanticNarrativeMaxOutputTokens, s.Provenance,
+			"must be zero or at most 1048576")
 	}
 	if compaction.SemanticNarrativeTimeout <= 0 ||
 		compaction.SemanticNarrativeTimeout > 10*time.Minute {

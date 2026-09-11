@@ -16,7 +16,6 @@ afterEach(() => {
 
 describe("MarkdownMessage", () => {
   it("renders math, CJK emphasis, nested content, wide tables, and code", async () => {
-    const openFile = vi.fn();
     const columns = Array.from({length: 8}, (_, index) => `Column ${index + 1}`);
     const values = Array.from({length: 8}, (_, index) => `value-${index + 1}`);
     const text = [
@@ -49,8 +48,6 @@ describe("MarkdownMessage", () => {
       <MarkdownMessage
         text={text}
         settled
-        canOpenPath
-        onOpenFile={openFile}
       />
     );
 
@@ -64,8 +61,10 @@ describe("MarkdownMessage", () => {
       .querySelectorAll("th")).toHaveLength(8);
     expect(screen.getByText("Quoted guidance").closest("blockquote")).toBeTruthy();
 
-    fireEvent.click(screen.getByRole("button", {name: "Open file src/main.ts"}));
-    expect(openFile).toHaveBeenCalledWith("src/main.ts");
+    expect(screen.getByText("Open source").closest(".markdownFileReference")?.getAttribute("title"))
+      .toBe("src/main.ts");
+    expect(screen.queryByRole("button", {name: /Open file/})).toBeNull();
+    expect(screen.queryByRole("link", {name: "Open source"})).toBeNull();
     expect(screen.queryByRole("link", {name: "Unsafe"})).toBeNull();
     expect(screen.getByText("Unsafe")).toBeTruthy();
 
@@ -90,8 +89,6 @@ describe("MarkdownMessage", () => {
           "![Remote diagram](https://images.example.test/diagram.png)"
         ].join("\n")}
         settled
-        canOpenPath={false}
-        onOpenFile={() => {}}
       />
     );
 

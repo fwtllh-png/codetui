@@ -277,7 +277,7 @@ func TestSessionControlCreatesActivatesAndSubmitsWithStableIdentity(t *testing.T
 	t.Cleanup(func() { closeRuntime(t, runtime) })
 	binding, err := runtime.CreateSession(t.Context(), CreateSessionRequest{
 		SessionID: "session-web", WorkspaceRoot: "/workspace",
-		Title: defaultSessionTitle, Isolation: "shared", IdempotencyKey: "create-1",
+		Isolation: "shared", IdempotencyKey: "create-1",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -290,7 +290,7 @@ func TestSessionControlCreatesActivatesAndSubmitsWithStableIdentity(t *testing.T
 	}
 	replayed, err := runtime.CreateSession(t.Context(), CreateSessionRequest{
 		SessionID: "session-web", WorkspaceRoot: "/workspace",
-		Title: defaultSessionTitle, Isolation: "shared", IdempotencyKey: "create-1",
+		Isolation: "shared", IdempotencyKey: "create-1",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -359,39 +359,15 @@ func TestSessionControlCreatesActivatesAndSubmitsWithStableIdentity(t *testing.T
 		first.ItemID != second.ItemID {
 		t.Fatalf("idempotent receipts differ: first=%+v second=%+v", first, second)
 	}
-	if store.summary.Title != "hello" || store.summary.Revision != 3 {
-		t.Fatalf("automatic title summary = %+v", store.summary)
+	if store.summary.Title != "New Chat" || store.summary.Revision != 1 {
+		t.Fatalf("prompt replaced the title without an LLM result: %+v", store.summary)
 	}
-}
-
-func TestPromptSessionTitle(t *testing.T) {
-	tests := []struct {
-		name   string
-		prompt string
-		want   string
-	}{
-		{
-			name:   "normalizes and limits words",
-			prompt: "  Build\n durable session titles from prompts safely  ",
-			want:   "Build durable session titles from",
-		},
-		{
-			name:   "uses direct Chinese request",
-			prompt: "请只读分析当前工作区：概括项目用途、核心模块和主要技术栈；不要修改文件。",
-			want:   "只读分析当前工作区：概括项目用途",
-		},
-		{
-			name:   "removes terminal controls",
-			prompt: "\x1b[31m请帮我 修复 parser\x1b[0m",
-			want:   "修复 parser",
-		},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			if got := promptSessionTitle(test.prompt); got != test.want {
-				t.Fatalf("promptSessionTitle() = %q, want %q", got, test.want)
-			}
-		})
+	replayed, err = runtime.CreateSession(t.Context(), CreateSessionRequest{
+		SessionID: "session-web", WorkspaceRoot: "/workspace",
+		Isolation: "shared", IdempotencyKey: "create-1",
+	})
+	if err != nil || replayed != binding {
+		t.Fatalf("automatic naming broke create replay: %+v %v", replayed, err)
 	}
 }
 
@@ -683,6 +659,7 @@ func (s *memorySessionLifecycleStore) CreateLifecycle(
 		Version: protocol.SessionLifecycleVersion, Revision: 1,
 		SessionID: seed.SessionID, ThreadID: seed.ThreadID,
 		Title: seed.Title, Status: protocol.SessionStatusIdle,
+		TitleSource: seed.TitleSource, TitleRevision: 1,
 		Isolation: seed.Isolation, WorkspaceRoot: seed.WorkspaceRoot,
 		WorkspaceLabel: seed.WorkspaceLabel,
 		Provider:       seed.Provider, Model: seed.Model,
@@ -824,6 +801,9 @@ func (s *memorySessionLifecycleStore) ActivateThread(
 	if sessionID != s.summary.SessionID {
 		return protocol.SessionSummary{}, errors.New("session not found")
 	}
+	if threadID == s.summary.ThreadID {
+		return s.summary, nil
+	}
 	s.summary.ParentThreadID = s.summary.ThreadID
 	s.summary.ThreadID = threadID
 	s.summary.Revision++
@@ -845,9 +825,32 @@ func (s *memorySessionLifecycleStore) UpdateLifecycle(
 	}
 	if patch.Title != nil {
 		s.summary.Title = *patch.Title
+		s.summary.TitleSource = protocol.SessionTitleManual
+		s.summary.TitleRevision++
 	}
 	s.summary.Revision++
 	return s.summary, nil
+}
+
+func (s *memorySessionLifecycleStore) UpdateGeneratedTitle(
+	_ context.Context, sessionID string, threadID protocol.ThreadID,
+	expected uint64, source protocol.SessionTitleSource, title string,
+) (protocol.SessionSummary, bool, error) {
+	previous := protocol.SessionTitleDefault
+	if source == protocol.SessionTitleAuto {
+		previous = protocol.SessionTitleTemporary
+	}
+	if s.deleted || s.summary.SessionID != sessionID {
+		return protocol.SessionSummary{}, false, errors.New("session not found")
+	}
+	if s.summary.ThreadID != threadID || s.summary.TitleSource != previous ||
+		s.summary.TitleRevision != expected || s.summary.Archived {
+		return s.summary, false, nil
+	}
+	s.summary.Title, s.summary.TitleSource = title, source
+	s.summary.TitleRevision++
+	s.summary.Revision++
+	return s.summary, true, nil
 }
 
 func (s *memorySessionLifecycleStore) DeleteLifecycle(

@@ -123,12 +123,17 @@ func validate(value contract, root string) error {
 		"web/src/ui/SettingsDialog.css",
 		"web/src/ui/WorkspaceContextDialog.css",
 		"web/src/ui/Trajectory.css",
+		"web/src/ui/theme/tokens.css",
+		"web/src/ui/theme/components.css",
+		"web/src/ui/primitives/primitives.css",
+		"web/src/ui/GitTools.css",
 	}) {
 		return errors.New("stylesheets must cover the production Web styles")
 	}
 	if !sameSet(value.LayoutRegions, []string{
 		"session_rail", "conversation", "composer", "settings_dialog",
 		"context_dialog", "trajectory_inspector",
+		"git_tools",
 	}) {
 		return errors.New("layout regions drifted")
 	}
@@ -168,7 +173,7 @@ func validate(value contract, root string) error {
 		return errors.New("behavior matrix is incomplete")
 	}
 	if value.CSSPolicy.SemanticPrefix != "--ch-" ||
-		value.CSSPolicy.MaxCardRadiusPX != 8 ||
+		value.CSSPolicy.MaxCardRadiusPX != 24 ||
 		!value.CSSPolicy.ForbidTransitionAll ||
 		!value.CSSPolicy.RequireReducedMotionForInfinite ||
 		!value.CSSPolicy.RequireRegisteredZIndex {

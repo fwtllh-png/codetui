@@ -46,6 +46,7 @@ func (a *Adapter) Prepare(request provider.ModelRequest) (providerwire.PreparedC
 			policy.EmptyToolOutput = "(empty tool output)"
 			policy.ThinkingOff =
 				request.Route.Model().Capabilities.ThinkingToggle
+			policy.ToolStream = request.Route.ProviderID() == "glm"
 		}
 		call, err = PrepareChat(request, a.id, policy)
 	case model.ProtocolOpenAIResponses:
@@ -78,6 +79,7 @@ type ChatPolicy struct {
 	RejectImages           bool
 	EmptyToolOutput        string
 	ThinkingOff            bool
+	ToolStream             bool
 }
 
 func PrepareChat(
@@ -281,6 +283,10 @@ func chatBody(
 		"model": request.Route.Model().WireID, "messages": messages,
 		"max_tokens": request.MaxOutputTokens, "stream": true,
 		"stream_options": map[string]bool{"include_usage": true},
+	}
+	if options.ToolStream {
+		// GLM otherwise buffers tool arguments even with stream=true.
+		body["tool_stream"] = true
 	}
 	if request.Temperature != nil {
 		body["temperature"] = *request.Temperature

@@ -4,8 +4,52 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/fwtllh-png/QCode/internal/runtime/app"
 	"github.com/fwtllh-png/QCode/internal/runtime/protocol"
 )
+
+func (s *Server) workspaceGitAction(r *http.Request, dependencies Dependencies) (any, error) {
+	if strings.TrimSpace(r.Header.Get("Idempotency-Key")) == "" {
+		return nil, protocol.NewProblem(protocol.CodeInvalidArgument, "Idempotency-Key header is required", false, nil)
+	}
+	var request app.GitRequest
+	if err := s.decodeRequest(r, &request); err != nil {
+		return nil, err
+	}
+	return dependencies.Runtime.ExecuteGit(r.Context(), request)
+}
+
+func (s *Server) workspaceGitStatus(r *http.Request, dependencies Dependencies) (any, error) {
+	if dependencies.Workspace == nil {
+		return nil, unavailable("workspace Git queries are unavailable")
+	}
+	if err := s.decodeRequest(r, &struct{}{}); err != nil {
+		return nil, err
+	}
+	result, err := dependencies.Workspace.GitOverview(r.Context())
+	if err != nil {
+		return nil, workspaceQueryError(err)
+	}
+	return result, nil
+}
+
+func (s *Server) workspaceGitDiff(r *http.Request, dependencies Dependencies) (any, error) {
+	if dependencies.Workspace == nil {
+		return nil, unavailable("workspace Git queries are unavailable")
+	}
+	var request struct {
+		Path   string `json:"path"`
+		Staged bool   `json:"staged"`
+	}
+	if err := s.decodeRequest(r, &request); err != nil {
+		return nil, err
+	}
+	result, err := dependencies.Workspace.GitPatch(r.Context(), request.Path, request.Staged)
+	if err != nil {
+		return nil, workspaceQueryError(err)
+	}
+	return result, nil
+}
 
 func (s *Server) workspaceGitSwitch(
 	r *http.Request,
@@ -37,10 +81,7 @@ func (s *Server) workspaceGitSwitch(
 			nil,
 		)
 	}
-	state, err := dependencies.Workspace.SwitchBranch(
-		r.Context(),
-		request.Branch,
-	)
+	state, err := dependencies.Runtime.SwitchGitBranch(r.Context(), request.Branch)
 	if err != nil {
 		return nil, protocol.NewProblem(
 			protocol.CodeConflict,

@@ -143,10 +143,10 @@ func SnapshotTurnSpec(
 		request.Recovery = &recovery
 	}
 	kernelPolicy := turnkernel.DefaultPolicy()
-	kernelPolicy.CompletionRequired = options.RequireCompletionDeclaration ||
-		request.Intent == protocol.TurnIntentPlan
-	kernelPolicy.StructuredTerminalRequired =
-		request.Intent == protocol.TurnIntentPlan
+	kernelPolicy.CompletionRequired = options.RequireCompletionDeclaration
+	// StructuredTerminalRequired stays off for the main agent and children.
+	// A no-tool assistant body is the stop signal; turn_complete is optional.
+	kernelPolicy.StructuredTerminalRequired = false
 	kernelPolicy.VerificationRequired = options.Verify.Enabled()
 	kernelPolicy.VerificationMustPass = options.Verify.Enabled() &&
 		options.Verify.Mode == VerifyModeHard &&

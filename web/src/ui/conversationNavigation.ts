@@ -3,6 +3,7 @@ import type {ConversationNode} from "../projection/conversation";
 export type ConversationNavigationKind =
   | "turn"
   | "question"
+  | "message"
   | "tool"
   | "file";
 
@@ -105,6 +106,16 @@ export function projectConversationNavigation(
           path
         }));
       }
+      return;
+    }
+    if (entry.kind === "commentary") {
+      const item = navigationItem({
+        id: `message:${entry.id}`, kind: "message",
+        entryID: entry.id, entryIndex,
+        turnID: entry.turnID, turnNumber,
+        label: compactText(entry.text), detail: `Update - Turn ${turnNumber}`
+      });
+      result.push({...item, searchText: `${item.searchText} ${normalize(entry.text)}`});
       return;
     }
     if (entry.kind === "deliverables") {
@@ -269,7 +280,7 @@ function addPath(paths: Set<string>, value: string): void {
 
 function nodeSummary(node: ConversationNode): string {
   if (node.kind === "user" || node.kind === "assistant" ||
-      node.kind === "reasoning") {
+      node.kind === "reasoning" || node.kind === "commentary") {
     return compactText(node.text);
   }
   if (node.kind === "tool") {

@@ -50,7 +50,7 @@ describe("Trajectory", () => {
     expect(screen.getByRole("complementary", {name: "Record inspector"}))
       .toBeTruthy();
     fireEvent.click(screen.getByRole("button", {name: "Show in chat"}));
-    expect(onOpenChat).toHaveBeenCalledWith("turn-1", undefined);
+    expect(onOpenChat).toHaveBeenCalledWith("turn-1", undefined, "event-1");
   });
 
   it("derives the virtualized ledger budget from viewport and row height", () => {
@@ -74,7 +74,12 @@ describe("Trajectory", () => {
     );
   });
 
-  it("shows the average common prefix in the toolbar", () => {
+  it.each([
+    [120, "120", "120"],
+    [57430, "57.4K", "57,430"],
+    [1234567, "1.2M", "1,234,567"],
+    [0, "0", "0"]
+  ])("shows prefix %s compactly with the exact value available", (tokens, compact, exact) => {
     render(
       <Trajectory
         events={[
@@ -82,7 +87,7 @@ describe("Trajectory", () => {
           event(2, "usage", {
             input_tokens: 200,
             cached_tokens: 150,
-            context: {prefix_compared: true, prefix_common_tokens: 120}
+            context: {prefix_compared: true, prefix_common_tokens: tokens}
           }),
           event(3, "turn.receipt", {
             latency: {first_token_ms: 320}
@@ -99,7 +104,9 @@ describe("Trajectory", () => {
     );
 
     const metrics = screen.getByLabelText("Prefix metrics");
-    expect(metrics.textContent).toContain("Prefix 120 tok");
+    expect(metrics.querySelector("strong")?.textContent).toBe(compact);
+    expect(metrics.getAttribute("title")).toBe(`${exact} prefix tokens`);
+    expect(screen.getByRole("searchbox", {name: "Search trajectory"})).toBeTruthy();
   });
 });
 

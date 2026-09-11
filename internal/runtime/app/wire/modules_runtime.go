@@ -334,6 +334,7 @@ func (runtimeModule) Build(
 			ProfileCapabilities: state.agent.profileCapabilities,
 			ProfileModels:       state.agent.profileModels,
 			SessionWorkspaces:   session.chatWorkspaces,
+			GitControl:          buildGitControl(state),
 		})
 		if err != nil {
 			return fmt.Errorf("create persistent runtime: %w", err)
@@ -345,6 +346,7 @@ func (runtimeModule) Build(
 			WorkspaceRoot: state.config.execution.Workspace,
 			ContentStore:  session.content,
 			Observability: runtimeObservability(state),
+			GitControl:    buildGitControl(state),
 		})
 		if err != nil {
 			return fmt.Errorf("prepare runtime: %w", err)

@@ -5,31 +5,58 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 const SessionLifecycleVersion = 1
 
+// SessionTitleMaxBytes is the stored title's UTF-8 byte limit.
+const SessionTitleMaxBytes = 256
+
+// JSON may escape every title byte as \uXXXX, plus the compact object framing.
+const SessionTitleJSONMaxBytes = 6*SessionTitleMaxBytes + len(`{"title":""}`)
+
+type SessionTitleSource string
+
+const (
+	SessionTitleDefault   SessionTitleSource = "default"
+	SessionTitleTemporary SessionTitleSource = "temporary"
+	SessionTitleAuto      SessionTitleSource = "auto"
+	SessionTitleManual    SessionTitleSource = "manual"
+)
+
+func ValidateSessionTitle(title string) error {
+	if !utf8.ValidString(title) || strings.TrimSpace(title) == "" || len(title) > SessionTitleMaxBytes ||
+		strings.ContainsAny(title, "\x00\r\n") {
+		return errors.New("session title is invalid")
+	}
+	return nil
+}
+
 type SessionCreateSeed struct {
-	Version        int      `json:"version"`
-	SessionID      string   `json:"session_id"`
-	WorkspaceID    string   `json:"workspace_id"`
-	WorkspaceRoot  string   `json:"workspace_root"`
-	WorkspaceLabel string   `json:"workspace_label"`
-	ThreadID       ThreadID `json:"thread_id"`
-	Title          string   `json:"title"`
-	Provider       string   `json:"provider"`
-	Model          string   `json:"model"`
-	Isolation      string   `json:"isolation"`
+	Version        int                `json:"version"`
+	SessionID      string             `json:"session_id"`
+	WorkspaceID    string             `json:"workspace_id"`
+	WorkspaceRoot  string             `json:"workspace_root"`
+	WorkspaceLabel string             `json:"workspace_label"`
+	ThreadID       ThreadID           `json:"thread_id"`
+	Title          string             `json:"title"`
+	TitleSource    SessionTitleSource `json:"title_source,omitempty"`
+	Provider       string             `json:"provider"`
+	Model          string             `json:"model"`
+	Isolation      string             `json:"isolation"`
 }
 
 func (s SessionCreateSeed) Validate() error {
+	if s.TitleSource != "" && s.TitleSource != SessionTitleDefault && s.TitleSource != SessionTitleManual {
+		return errors.New("session create title source is invalid")
+	}
 	if s.Version != SessionLifecycleVersion ||
 		!validProfileIdentifier(s.SessionID) ||
 		!validProfileIdentifier(s.WorkspaceID) ||
 		s.ThreadID == "" || len(s.ThreadID) > 256 ||
 		strings.TrimSpace(s.WorkspaceRoot) == "" ||
-		strings.TrimSpace(s.Title) == "" || len(s.Title) > 256 ||
-		strings.ContainsAny(s.Title, "\x00\r\n") ||
+		ValidateSessionTitle(s.Title) != nil ||
 		!validProfileIdentifier(s.Provider) ||
 		!validProfileIdentifier(s.Model) {
 		return errors.New("session create seed is invalid")
@@ -59,6 +86,8 @@ type SessionSummary struct {
 	SessionID        string                 `json:"session_id"`
 	ThreadID         ThreadID               `json:"thread_id"`
 	Title            string                 `json:"title"`
+	TitleSource      SessionTitleSource     `json:"title_source,omitempty"`
+	TitleRevision    uint64                 `json:"title_revision,omitempty"`
 	Status           SessionLifecycleStatus `json:"status"`
 	Pinned           bool                   `json:"pinned"`
 	Archived         bool                   `json:"archived"`
@@ -99,9 +128,16 @@ func (s SessionSummary) Validate() error {
 		!validProfileIdentifier(string(s.ThreadID)) {
 		return errors.New("session summary identity is invalid")
 	}
-	if strings.TrimSpace(s.Title) == "" || len(s.Title) > 256 ||
-		strings.ContainsAny(s.Title, "\x00\r\n") {
+	if ValidateSessionTitle(s.Title) != nil {
 		return errors.New("session summary title is invalid")
+	}
+	if s.TitleSource != "" && s.TitleSource != SessionTitleDefault &&
+		s.TitleSource != SessionTitleTemporary && s.TitleSource != SessionTitleAuto &&
+		s.TitleSource != SessionTitleManual {
+		return errors.New("session title source is invalid")
+	}
+	if s.TitleSource != "" && s.TitleRevision == 0 {
+		return errors.New("session title revision is required")
 	}
 	if !validSessionLifecycleStatus(s.Status) {
 		return fmt.Errorf("session summary status %q is invalid", s.Status)
@@ -245,8 +281,7 @@ func (p SessionLifecyclePatch) Validate() error {
 	}
 	if p.Title != nil {
 		title := strings.TrimSpace(*p.Title)
-		if title == "" || len(title) > 256 ||
-			strings.ContainsAny(title, "\x00\r\n") {
+		if ValidateSessionTitle(title) != nil {
 			return errors.New("session lifecycle title is invalid")
 		}
 	}

@@ -10,11 +10,13 @@ import {tmpdir} from "node:os";
 import path from "node:path";
 import type {Readable} from "node:stream";
 import {fileURLToPath} from "node:url";
+import type {WorkspaceCatalog} from "../../src/protocol";
 
 const repositoryRoot = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "../../.."
 );
+const binary = process.env.QCODE_E2E_BINARY || path.join(repositoryRoot, "bin/qcode");
 
 let server: ChildProcessByStdio<null, Readable, Readable>;
 let dataDir: string;
@@ -43,7 +45,7 @@ test.beforeEach(async () => {
   );
   execFileSync("git", ["init", "-q"], {cwd: workspaceDir});
   server = spawn(
-    path.join(repositoryRoot, "bin/qcode"),
+    binary,
     [
       "--workspace", workspaceDir,
       "--data-dir", dataDir,
@@ -258,10 +260,15 @@ test("shows and switches the Workspace Git branch", async ({page}) => {
   execFileSync("git", ["branch", "feature"], {cwd: workspaceDir});
   await page.goto(baseURL);
 
-  const branch = page.getByLabel(`Branch for ${path.basename(workspaceDir)}`);
-  await expect(branch).toBeVisible();
-  await branch.selectOption("feature");
-  await expect(branch).toHaveValue("feature");
+  const panel = page.getByRole("complementary", {name: "Git tools"});
+  const branch = execFileSync("git", ["branch", "--show-current"], {
+    cwd: workspaceDir, encoding: "utf8"
+  }).trim();
+  await expect(page.locator(".workspaceGroup select")).toHaveCount(0);
+  await panel.getByRole("button", {name: branch, exact: true}).click();
+  await panel.getByRole("button", {name: "feature", exact: true}).click();
+  await expect(panel.getByRole("searchbox", {name: "Search Git branches"})).toHaveCount(0);
+  await expect(panel.locator(".gitSummary").getByRole("button", {name: "feature", exact: true})).toBeVisible();
   expect(execFileSync(
     "git", ["branch", "--show-current"], {cwd: workspaceDir, encoding: "utf8"}
   ).trim()).toBe("feature");
@@ -278,7 +285,7 @@ test("adds a second Workspace and keeps its Sessions isolated", async ({page}) =
     );
     execFileSync("git", ["init", "-q"], {cwd: secondary});
     execFileSync("git", ["add", "README.md"], {cwd: secondary});
-    execFileSync(path.join(repositoryRoot, "bin/qcode"), [
+    execFileSync(binary, [
       "--workspace", secondary,
       "--data-dir", dataDir,
       "--provider-fixture", path.join(repositoryRoot, "testdata/providers/openai"),
@@ -300,25 +307,26 @@ test("adds a second Workspace and keeps its Sessions isolated", async ({page}) =
     await secondaryGroup.locator(".workspaceRow").click();
     await expect(secondaryGroup.locator(".workspaceHeader"))
       .toHaveAttribute("data-active", "true");
-    await page.getByRole("button", {name: "Create session"}).click();
+    await expect(page.locator("#git-tools .gitScope")).toContainText(path.basename(secondary));
+    await secondaryGroup.locator(".workspaceCreateAction button").click();
     await expect(secondaryGroup.locator(".sessionRow")).toHaveCount(1);
 
     await primaryGroup.locator(".workspaceRow").click();
     await expect(primaryGroup.locator(".workspaceHeader"))
       .toHaveAttribute("data-active", "true");
-    await page.getByRole("button", {name: "Create session"}).click();
+    await expect(page.locator("#git-tools .gitScope")).toContainText(path.basename(workspaceDir));
+    await primaryGroup.locator(".workspaceCreateAction button").click();
     await expect(primaryGroup.locator(".sessionRow")).toHaveCount(1);
     await expect(secondaryGroup.locator(".sessionRow")).toHaveCount(1);
 
-    await page.getByRole("button", {name: "Add workspace"}).click();
-    await expect(page.getByRole("dialog", {name: "Workspaces"})).toBeVisible();
     await expect(page.getByRole("button", {
       name: `Remove ${path.basename(workspaceDir)}`
-    })).toHaveCount(0);
-    page.once("dialog", (dialog) => dialog.accept());
+    })).toHaveCount(1);
+    await secondaryGroup.hover();
     await page.getByRole("button", {
       name: `Remove ${path.basename(secondary)}`
     }).click();
+    await page.getByRole("alertdialog").getByRole("button", {name: "Remove workspace"}).click();
     await expect(page.locator(".workspaceGroup")).toHaveCount(1);
 
     await page.setViewportSize({width: 390, height: 844});
@@ -815,12 +823,11 @@ function runtimeURL(
 async function workspaceURL(origin: string): Promise<string> {
   const bootstrap = await fetch(new URL("/api/v1/bootstrap", origin));
   const value = await bootstrap.json() as {
-    workspace_catalog: {default_workspace_id: string};
+    workspace_catalog: WorkspaceCatalog;
   };
+  const workspaces = value.workspace_catalog.workspaces.filter((workspace) => workspace.ready);
+  if (workspaces.length !== 1) throw new Error("Expected one ready workspace in the isolated browser fixture");
   const target = new URL(origin);
-  target.searchParams.set(
-    "workspace",
-    value.workspace_catalog.default_workspace_id
-  );
+  target.searchParams.set("workspace", workspaces[0].id);
   return target.toString();
 }

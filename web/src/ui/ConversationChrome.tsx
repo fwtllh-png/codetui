@@ -10,6 +10,7 @@ import {
   useState,
   type CSSProperties
 } from "react";
+import {Presence} from "./primitives/Presence";
 
 export type MessageFeedbackRating = "positive" | "negative";
 
@@ -180,9 +181,10 @@ export function ContextMeter({
           />
         </svg>
       </button>
-      {open && (
+      <Presence open={open}>
         <div
           className="contextPanel"
+          data-motion-surface
           role="dialog"
           aria-label="Context usage"
         >
@@ -221,7 +223,7 @@ export function ContextMeter({
           )}
           <small>Last model sample · provider-safe token attribution</small>
         </div>
-      )}
+      </Presence>
     </span>
   );
 }

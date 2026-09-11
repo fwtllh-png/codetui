@@ -21,28 +21,28 @@
 .assistantMarkdown h1 {
   margin: 32px 0 16px;
   font-size: 28px;
-  font-weight: 650;
+  font-weight: 600;
   line-height: 36px;
 }
 
 .assistantMarkdown h2 {
   margin: 32px 0 16px;
   font-size: 24px;
-  font-weight: 650;
+  font-weight: 600;
   line-height: 32px;
 }
 
 .assistantMarkdown h3 {
   margin: 28px 0 14px;
   font-size: 20px;
-  font-weight: 650;
+  font-weight: 600;
   line-height: 28px;
 }
 
 .assistantMarkdown :where(h4, h5, h6) {
   margin: 16px 0 8px;
   font-size: 16px;
-  font-weight: 650;
+  font-weight: 600;
   line-height: 24px;
 }
 
@@ -145,21 +145,10 @@
   align-items: baseline;
   gap: 5px;
   padding: 0;
-  color: var(--ch-business);
+  color: var(--ch-text-secondary);
   text-align: left;
   text-decoration: none;
   background: transparent;
-}
-
-.markdownFileReference:hover:not(:disabled),
-.markdownFileReference:focus-visible {
-  text-decoration: underline;
-  text-underline-offset: 3px;
-}
-
-.markdownFileReference:disabled {
-  color: var(--ch-text-muted);
-  cursor: not-allowed;
 }
 
 .markdownCodeBlock {
@@ -168,7 +157,7 @@
   overflow: hidden;
   background: var(--ch-code);
   border: 1px solid var(--ch-border);
-  border-radius: 8px;
+  border-radius: var(--ch-radius-control);
 }
 
 .markdownCodeHeader {
@@ -196,7 +185,7 @@
   place-items: center;
   color: var(--ch-text-muted);
   background: transparent;
-  border-radius: 6px;
+  border-radius: var(--ch-radius);
 }
 
 .markdownCodeHeader button:hover,
@@ -255,7 +244,7 @@
 .markdownTable th {
   color: var(--ch-text);
   font-size: 14px;
-  font-weight: 650;
+  font-weight: 600;
   border-bottom-color: var(--ch-border-strong);
 }
 
@@ -310,7 +299,7 @@
   place-items: center;
   background: var(--ch-panel-subtle);
   border: 1px solid var(--ch-border);
-  border-radius: 8px;
+  border-radius: var(--ch-radius-control);
 }
 
 .markdownImage img {
@@ -374,7 +363,7 @@
   text-align: left;
   background: var(--ch-panel-subtle);
   border: 1px solid var(--ch-border);
-  border-radius: 8px;
+  border-radius: var(--ch-radius-control);
 }
 
 .markdownImageConsent > svg {

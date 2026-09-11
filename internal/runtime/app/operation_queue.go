@@ -28,6 +28,9 @@ func (s *OperationService) SubmitWithKey(
 		s.metrics.Error()
 		return ErrClosed
 	}
+	if s.workspaceOperation {
+		return retryableProblem(protocol.CodeConflict, "a Workspace Git operation is active")
+	}
 	if len(s.operations) == cap(s.operations) {
 		s.metrics.Error()
 		return ErrQueueFull

@@ -83,40 +83,30 @@ QCode 为省 token 和防"原地打转"设置了大量硬闸门。每次被闸�
 （延迟 + token），这就是"折返"体感的机制化来源。
 
 **B1 正文随时作废重写。**
-模型的普通文本是 ProvisionalOutput，一旦提出新工具调用即被丢弃
-（`internal/runtime/agent/turnkernel/reducer_tool.go:27-36`）；每次 repair 也执行
-`DiscardOutput`（`internal/runtime/agent/engine/turn_handler.go:792-837`）。最终答案
-必须在 `turn_complete` 的 summary 里重写一遍——"写了丢、丢了再写"。
+已改为：后续工具批次不再清空已捕获正文。Repair 仍可能 `DiscardOutput`，但停轮
+不再要求把答案重写进 `turn_complete` summary。
 
 **B2 强制结构化收尾与 Declaration Repair。**
-默认 `RequireCompletionDeclaration = execution.Tools`（即 true，
-`internal/runtime/app/wire/modules_runtime.go:167`）。只读直答回合可由 provider
-`end_turn` 完成（架构文档已述），但**执行过工具的回合必须 `turn_complete` 收尾**；
-纯文本停止触发 Declaration Repair（预算默认 1，
-`internal/runtime/agent/turnkernel/reducer_common.go:109-117`）再采一轮。
+已改为：`RequiresCompletion` 只在显式 `StructuredTerminalRequired` 时成立。
+主 Agent 与 Child 都可靠无工具正文停轮；`turn_complete` 仍可用于 incomplete
+或精确替换答案。
 
 **B3 "想结束被强制继续"链。**
-plan 存在未完成步骤且发生过 mutation 时，`turn_complete(complete)` 被拒
-（`plan_progress_incomplete`，
-`internal/runtime/agent/turnkernel/reducer_verification.go:132-138`），随后走
-"拒绝 → Declaration Repair → 再拒 → Convergence → 最终可能 blocked 失败"链
-（`turn_handler.go:818-871`、`:692-763`），最多消耗 3+ 轮采样。合法出口只有两个：
-把剩余步骤做完/标 done，或声明 `status=incomplete`。
+已改为：`turn_complete(status=complete)` 是停轮信号，未完成的 execution
+Plan 步骤不再拒绝 complete。Plan 留在 Session 上供后续 Turn 继续。仍会拒绝
+非法声明（缺 summary、complete 却带 pending_actions、workspace_change
+且无 mutation）。
 
 **B4 观察闸门开局碰壁。**
-Continue 恢复时 `git_status`/`git_diff` 直接被拒；已读路径的整文件重读被拒；finish-only
-阶段无窗口 `file_read` 被拒（`internal/runtime/agent/engine/observation_gate.go:17-94`）。
-模型"先看看现状再动手"的惯性开局会连续撞墙数轮，每次撞墙 = 一轮完整采样。
+已改为：已知路径覆盖读回放，无法回放则放行；Continue 上的 `git_status` /
+`git_diff` 与定位后的整文件 `file_read` 不再报错拒绝。
 
 **B5 无进展检测的长尾。**
-实现阶段（Work Item 有 Known/Open 后）改用
-`execution.implement_no_progress_samples`（默认 6）：第 3 个无进展采样开始提示收敛，
-第 6 个进入 finish-only，但强制 Finalization 要到
-`max(lease+1, MaxSteps + repair 预算)` = 69 个无进展采样之后
-（`internal/runtime/agent/turnkernel/reducer_sampling.go:449-455`、
-`internal/runtime/agent/engine/turncontext.go:160-170`）。中间区间很长，且 `MaxSteps`
-（默认 64）**不是硬步数上限**——主循环 `for step := 0; ; step++` 没有 step 检查
-（`turn_handler.go:891`），小进展（如把 plan 步骤标 done）可持续续租。
+No-progress 只在相邻 Sample 重复同一工具调用身份时累加。
+`execution.implement_no_progress_samples`（默认 6）约束的是这种空转：
+第 3 次重复提示收敛，第 6 次 finish-only，再加 Repair 预算后 Finalization。
+不同 arguments 的同路径验证/修正不会进入该短租约。`MaxSteps`（默认 64）
+仍不是硬步数上限；Work Item 签名变化或工具身份变化都会清零计数。
 
 **B6 失败缓存回放。**
 模型原样重发失败调用时直接拿回同一份缓存失败

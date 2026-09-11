@@ -15,15 +15,51 @@
   top: 0;
   z-index: var(--ch-layer-content);
   display: flex;
-  min-height: 34px;
+  min-height: 38px;
   flex-wrap: wrap;
   align-items: center;
-  padding: 5px 6px;
+  gap: 6px 12px;
+  padding: 6px 8px;
   background: var(--ch-panel);
   border-bottom: 1px solid var(--ch-border);
 }
 
-.trajectoryToolbar > button,
+.trajectoryModes {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 2px;
+}
+
+.trajectoryFilters {
+  display: flex;
+  flex: 1 1 240px;
+  min-width: 0;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+}
+
+.trajectoryMetrics {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: baseline;
+  gap: 6px;
+  padding-left: 12px;
+  border-left: 1px solid var(--ch-border);
+  color: var(--ch-text-muted);
+  font-size: 11px;
+  line-height: 22px;
+  white-space: nowrap;
+}
+
+.trajectoryMetrics strong {
+  color: var(--ch-text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.trajectoryModes > button,
 .trajectoryNotice button {
   display: inline-flex;
   height: 22px;
@@ -36,8 +72,8 @@
   font-size: 11px;
 }
 
-.trajectoryToolbar > button:hover,
-.trajectoryToolbar > button[aria-pressed="true"],
+.trajectoryModes > button:hover,
+.trajectoryModes > button[aria-pressed="true"],
 .trajectoryNotice button:hover {
   color: var(--ch-text);
   background: var(--ch-panel-subtle);
@@ -47,15 +83,15 @@
   display: flex;
   min-width: 84px;
   height: 22px;
-  flex: 0 1 164px;
+  flex: 1 1 164px;
+  max-width: 240px;
   align-items: center;
   gap: 4px;
-  margin-left: auto;
   padding: 0 6px;
   color: var(--ch-text-muted);
   background: var(--ch-panel-subtle);
   border: 1px solid var(--ch-border);
-  border-radius: 4px;
+  border-radius: var(--ch-radius);
 }
 
 .trajectorySearch:focus-within {
@@ -181,7 +217,7 @@
   top: 50%;
   left: 50%;
   color: var(--ch-text-muted);
-  font-size: 10px;
+  font-size: 11px;
   transform: translate(-50%, -50%);
 }
 
@@ -195,7 +231,7 @@
   color: var(--ch-text-muted);
   background: var(--ch-panel);
   border-bottom: 1px solid var(--ch-border);
-  font-size: 10px;
+  font-size: 11px;
 }
 
 .trajectorySplit {
@@ -266,8 +302,8 @@
   justify-content: flex-end;
   gap: 5px;
   overflow: hidden;
-  font-size: 10px;
-  font-weight: 650;
+  font-size: 11px;
+  font-weight: 600;
   text-align: right;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -293,7 +329,7 @@
 .ledgerRow[data-kind="assistant"] .ledgerKind { color: var(--ch-reasoning); }
 .ledgerRow[data-kind="tool"] .ledgerKind { color: var(--ch-tool); }
 .ledgerRow[data-kind="verification"] .ledgerKind,
-.ledgerRow[data-kind="receipt"] .ledgerKind { color: var(--ch-accent); }
+.ledgerRow[data-kind="receipt"] .ledgerKind { color: var(--ch-accent-strong); }
 
 .ledgerSummary {
   min-width: 0;
@@ -388,7 +424,7 @@
   padding: 0;
   color: var(--ch-text-muted);
   background: transparent;
-  border-radius: 4px;
+  border-radius: var(--ch-radius);
 }
 
 .recordInspector > header button:hover {
@@ -417,7 +453,7 @@
   padding: 0 0 9px;
   color: var(--ch-text-muted);
   background: transparent;
-  font-size: 10px;
+  font-size: 11px;
 }
 
 .inspectorTabs button[aria-selected="true"] {
@@ -457,7 +493,7 @@
   min-width: 0;
   margin: 0;
   overflow-wrap: anywhere;
-  font-size: 10px;
+  font-size: 11px;
 }
 
 .inspectorFacts dt {
@@ -479,8 +515,8 @@
 
 .inspectorPreview > span {
   color: var(--ch-text-muted);
-  font-size: 10px;
-  font-weight: 650;
+  font-size: 11px;
+  font-weight: 600;
   text-transform: uppercase;
 }
 
@@ -508,8 +544,8 @@
   padding: 0 6px;
   color: var(--ch-text-muted);
   background: var(--ch-code);
-  border-radius: 5px;
-  font-size: 10px;
+  border-radius: var(--ch-radius);
+  font-size: 11px;
 }
 
 .inspectorCode > button:hover {
@@ -526,7 +562,7 @@
   background: var(--ch-code);
   border: 1px solid var(--ch-border);
   border-radius: var(--ch-radius);
-  font-size: 10px;
+  font-size: 11px;
   line-height: 17px;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -538,8 +574,17 @@
   }
 
   .trajectorySearch {
-    min-width: calc(100% - 4px);
-    order: 2;
+    max-width: none;
+  }
+
+  .trajectoryFilters {
+    flex-basis: 100%;
+    gap: 8px;
+  }
+
+  .trajectoryMetrics {
+    gap: 4px;
+    padding-left: 8px;
   }
 
   .recordInspector {

@@ -78,6 +78,7 @@ describe("RuntimeClient", () => {
   let snapshotEvents: ReturnType<typeof runtimeEvent>[] | null = null;
   let snapshotTruncatedBefore = 0;
   let earlierEvents: ReturnType<typeof runtimeEvent>[] = [];
+  let historyGate: Promise<void> | undefined;
   let moreBefore = false;
   let presets: AgentPreset[] = [];
   let presetRevision = 0;
@@ -102,6 +103,7 @@ describe("RuntimeClient", () => {
     snapshotEvents = null;
     snapshotTruncatedBefore = 0;
     earlierEvents = [];
+    historyGate = undefined;
     moreBefore = false;
     presets = [];
     presetRevision = 0;
@@ -165,7 +167,6 @@ describe("RuntimeClient", () => {
           ready: true,
           draining: false,
           workspace_root: "/workspace",
-          can_open_path: true,
           setup_catalog: {
             version: 1,
             providers: [{
@@ -377,14 +378,16 @@ describe("RuntimeClient", () => {
         });
       }
       if (route.endsWith("/session/history")) {
-        return envelope({
+        const page = {
           session_id: "session",
           events: earlierEvents,
           next_sequence: earlierEvents.at(-1)?.sequence ?? 0,
           more: false,
           previous_sequence: earlierEvents[0]?.sequence ?? 0,
           more_before: moreBefore
-        });
+        };
+        await historyGate;
+        return envelope(page);
       }
       if (route.endsWith("/profile/get")) {
         await profileGate;
@@ -580,9 +583,6 @@ describe("RuntimeClient", () => {
           bytes: 13
         });
       }
-      if (route.endsWith("/workspace/open")) {
-        return envelope({opened: true, path: "src/main.go"});
-      }
       if (route.endsWith("/workspace/select-directory")) {
         return envelope({path: "/workspace/selected"});
       }
@@ -683,6 +683,15 @@ describe("RuntimeClient", () => {
           diff: "diff --git a/main.go b/main.go\n",
           digest: "b".repeat(64)
         });
+      }
+      if (route.endsWith("/workspace/git-status")) {
+        return envelope({repository: true, branch: "main", branches: ["main"], files: [], remotes: []});
+      }
+      if (route.endsWith("/workspace/git-diff")) {
+        return envelope({path: body.path, staged: body.staged, diff: "+changed"});
+      }
+      if (route.endsWith("/workspace/git-action")) {
+        return envelope({action: body.action, commit_hash: "new-commit", completed: ["git_commit"]});
       }
       if (route.endsWith("/operation/submit")) {
         return envelope({
@@ -1112,6 +1121,30 @@ describe("RuntimeClient", () => {
     client.stop();
   });
 
+  it("binds Git inspection and action requests to a Workspace without consuming the composer context", async () => {
+    multipleWorkspaces = true;
+    const client = new RuntimeClient();
+    await startClient(client);
+    await client.gitOverview("workspace-b-id");
+    await client.gitPatch("workspace-b-id", "a.txt", true);
+    const reads = requests.filter((value) =>
+      value.route.endsWith("/workspace/git-status") || value.route.endsWith("/workspace/git-diff"));
+    expect(reads.map((value) => value.headers.get("X-QCode-Workspace-ID")))
+      .toEqual(["workspace-b-id", "workspace-b-id"]);
+    expect(reads[1].body).toEqual({path: "a.txt", staged: true});
+    client.saveDraft("unfinished question");
+    const action = {action: "commit" as const, branch: "main", revision: "reviewed-index", message: 'fix "quotes"', paths: ["a.txt"], include_unstaged: false};
+    await client.executeGitAction("workspace-id", "session", action);
+    const submit = requests.find((value) => value.route.endsWith("/workspace/git-action"));
+    expect(submit?.headers.get("X-QCode-Workspace-ID")).toBe("workspace-id");
+    expect(submit?.headers.get("Idempotency-Key")).toBe("request-id");
+    expect(submit?.body).toEqual({session_id: "session", ...action});
+    expect(requests.some((value) => value.route.endsWith("/operation/submit"))).toBe(false);
+    expect(await client.loadDraft()).toBe("unfinished question");
+    await expect(client.executeGitAction("workspace-b-id", "session-b", action)).rejects.toThrow("selected Workspace");
+    client.stop();
+  });
+
   it("binds cross-Workspace Session hydration to its owner Runtime", async () => {
     multipleWorkspaces = true;
     const client = new RuntimeClient();
@@ -1451,21 +1484,6 @@ describe("RuntimeClient", () => {
     client.stop();
   });
 
-  it("opens a workspace path only through the authenticated Host route", async () => {
-    const client = new RuntimeClient();
-    await startClient(client);
-
-    expect(client.getSnapshot().canOpenPath).toBe(true);
-    await expect(client.openWorkspacePath("src/main.go")).resolves.toEqual({
-      opened: true,
-      path: "src/main.go"
-    });
-    expect(requests.find(
-      (request) => request.route.endsWith("/workspace/open")
-    )?.body).toEqual({path: "src/main.go"});
-    client.stop();
-  });
-
   it("selects a workspace directory through the authenticated Host route", async () => {
     const client = new RuntimeClient();
     await startClient(client);
@@ -1749,6 +1767,67 @@ describe("RuntimeClient", () => {
     client.stop();
   });
 
+  it("coalesces history requests and preserves live events received while loading", async () => {
+    snapshotSequence = 12;
+    snapshotTruncatedBefore = 9;
+    snapshotEvents = [runtimeEvent(10, "output.delta"), runtimeEvent(12, "turn.completed")];
+    earlierEvents = [runtimeEvent(8, "output.delta"), runtimeEvent(9, "turn.completed")];
+    let release!: () => void;
+    historyGate = new Promise<void>((resolve) => { release = resolve; });
+    const client = new RuntimeClient();
+    const socket = await startClient(client);
+    const first = client.loadEarlierHistory();
+    expect(client.loadEarlierHistory()).toBe(first);
+    expect(requests.filter((request) => request.route.endsWith("/session/history"))).toHaveLength(1);
+    socket.emit("message", {
+      type: "event", protocol_version: 1, session_id: "session", sequence: 13,
+      event: runtimeEvent(13, "output.delta")
+    });
+    release();
+    expect(await first).toBe(2);
+    expect(client.getSnapshot().events.map((event) => event.sequence)).toEqual([8, 9, 10, 12, 13]);
+    expect(client.getSnapshot().historyMoreBefore).toBe(false);
+    client.stop();
+  });
+
+  it("cancels and discards history responses even after returning to the same Session", async () => {
+    snapshotSequence = 12;
+    snapshotTruncatedBefore = 9;
+    snapshotEvents = [runtimeEvent(10, "output.delta"), runtimeEvent(12, "turn.completed")];
+    earlierEvents = [runtimeEvent(8, "turn.completed")];
+    let release!: () => void;
+    historyGate = new Promise<void>((resolve) => { release = resolve; });
+    const client = new RuntimeClient();
+    await startClient(client);
+    const pending = client.loadEarlierHistory();
+    const historyCall = vi.mocked(fetch).mock.calls.find(([url]) => String(url).endsWith("/session/history"));
+    await client.selectSession("session-b");
+    expect(historyCall?.[1]?.signal?.aborted).toBe(true);
+    snapshotEvents = [runtimeEvent(20, "turn.completed")];
+    snapshotSequence = 20;
+    await client.selectSession("session");
+    release();
+    expect(await pending).toBe(0);
+    expect(client.getSnapshot().events.map((event) => event.sequence)).toEqual([20]);
+    client.stop();
+  });
+
+  it("rejects a non-advancing history cursor and allows an explicit retry", async () => {
+    snapshotSequence = 10;
+    snapshotTruncatedBefore = 9;
+    snapshotEvents = [runtimeEvent(10, "turn.completed")];
+    earlierEvents = [runtimeEvent(10, "turn.completed")];
+    moreBefore = true;
+    const client = new RuntimeClient();
+    await startClient(client);
+    await expect(client.loadEarlierHistory()).rejects.toThrow("History did not advance");
+    earlierEvents = [runtimeEvent(9, "turn.completed")];
+    moreBefore = false;
+    expect(await client.loadEarlierHistory()).toBe(1);
+    expect(client.getSnapshot().events.map((event) => event.sequence)).toEqual([9, 10]);
+    client.stop();
+  });
+
   it("merges live events received while a session snapshot hydrates", async () => {
     const client = new RuntimeClient();
     await startClient(client);
@@ -1830,6 +1909,24 @@ describe("RuntimeClient", () => {
       (request) => request.route.endsWith("/session/list")
     ).length;
     expect(after - before).toBe(1);
+    client.stop();
+  });
+
+  it.each(["session", "foreign-session"])("refreshes automatic titles for %s without a chat message", async (sessionID) => {
+    const client = new RuntimeClient();
+    const socket = await startClient(client);
+    const before = requests.filter((request) => request.route.endsWith("/session/list")).length;
+    const order = client.getSnapshot().conversation.order;
+    socket.emit("message", {
+      type: "event", protocol_version: 1, session_id: sessionID, sequence: 20,
+      event: {...runtimeEvent(20, "session.title.updated"), data: {
+        session_id: sessionID, title: "Inspect parser behavior", title_source: "auto", title_revision: 3
+      }}
+    });
+    await vi.waitFor(() => expect(
+      requests.filter((request) => request.route.endsWith("/session/list"))
+    ).toHaveLength(before + 1));
+    expect(client.getSnapshot().conversation.order).toEqual(order);
     client.stop();
   });
 
@@ -2051,6 +2148,43 @@ describe("RuntimeClient", () => {
 
     expect(requests.some((request) => request.route.endsWith("/session/snapshot")))
       .toBe(true);
+    client.stop();
+  });
+
+  it("preserves requested hydration when a background list supersedes startup", async () => {
+    snapshotSequence = 3;
+    snapshotEvents = [
+      {...runtimeEvent(1, "turn.started"), data: {prompt: "Inspect"}},
+      {...runtimeEvent(2, "commentary.completed"), data: {
+        message_id: "message", sample_id: "sample", text: "Checking callers.", call_ids: ["read"]
+      }},
+      {...runtimeEvent(3, "turn.completed"), data: {text: "Done"}}
+    ];
+    const originalFetch = globalThis.fetch;
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let firstList = false;
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).endsWith("/session/list") && !firstList) {
+        firstList = true;
+        await gate;
+      }
+      return originalFetch(input, init);
+    }));
+    const client = new RuntimeClient();
+    const starting = client.start();
+    await vi.waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    const socket = FakeWebSocket.instances[0]!;
+    socket.emit("open");
+    socket.emit("message", {type: "hello", protocol_version: 1, sequence: 0});
+    await vi.waitFor(() => expect(firstList).toBe(true));
+    await client.refreshSessions("", false);
+    release!();
+    await starting;
+    expect(client.getSnapshot().events.map((event) => event.kind))
+      .toEqual(["turn.started", "commentary.completed", "turn.completed"]);
+    expect(requests.filter((request) => request.route.endsWith("/session/snapshot")))
+      .toHaveLength(1);
     client.stop();
   });
 

@@ -525,3 +525,134 @@ func TestLifecyclePersistsTheActiveForkThread(t *testing.T) {
 		t.Fatalf("recovered active Thread = %+v", recovered)
 	}
 }
+
+func TestDeleteLifecycleTurnState(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		discard     bool
+		lastSession bool
+		active      bool
+		stale       bool
+		failTable   string
+		wantError   bool
+	}{
+		{name: "delete all threads"},
+		{name: "discard final session", discard: true, lastSession: true},
+		{name: "active turn rejected", active: true, wantError: true},
+		{name: "stale revision rejected", stale: true, wantError: true},
+		{name: "last session protected", lastSession: true, wantError: true},
+		{name: "cleanup failure rolls back", failTable: "turn_terminal_envelopes", wantError: true},
+		{name: "session delete failure rolls back", failTable: "sessions", wantError: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "state.db")
+			store, err := sqlitestate.Open(t.Context(), path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = store.Close() })
+			repository := session.NewSQLiteRepository(store)
+			now := time.Now().UTC().Format(time.RFC3339Nano)
+			owners := []string{"deleted"}
+			if !tc.lastSession {
+				owners = append(owners, "retained")
+			}
+			tables := []string{"turn_domain_facts", "turn_terminal_envelopes", "turn_terminal_outbox"}
+			for _, owner := range owners {
+				if _, err := repository.CreateLifecycle(t.Context(), protocol.SessionCreateSeed{
+					Version:   protocol.SessionLifecycleVersion,
+					SessionID: owner, WorkspaceID: "workspace",
+					WorkspaceRoot: "/workspace", WorkspaceLabel: "fixture",
+					ThreadID: protocol.ThreadID(owner), Title: owner,
+					Provider: "fixture", Model: "model", Isolation: "shared",
+				}); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := store.DB().ExecContext(t.Context(), `
+					INSERT INTO threads(id, session_id, parent_thread_id, status, created_at, updated_at)
+					VALUES (?, ?, ?, 'open', ?, ?)`,
+					owner+"-child", owner, owner, now, now,
+				); err != nil {
+					t.Fatal(err)
+				}
+				for _, thread := range []string{owner, owner + "-child"} {
+					status := "completed"
+					if tc.active && owner == "deleted" {
+						status = "active"
+					}
+					if _, err := store.DB().ExecContext(t.Context(), `
+						INSERT INTO turns(id, thread_id, ordinal, status, created_at, updated_at)
+						VALUES (?, ?, 1, ?, ?, ?)`,
+						thread, thread, status, now, now,
+					); err != nil {
+						t.Fatal(err)
+					}
+					for _, statement := range []string{
+						`INSERT INTO turn_domain_facts(turn_id, sequence, fact_json) VALUES (?, 1, '{}')`,
+						`INSERT INTO turn_terminal_envelopes(turn_id, effect_id, digest, envelope_json, marker_json)
+						 VALUES (?, 'effect', 'digest', '{}', '{}')`,
+						`INSERT INTO turn_terminal_outbox(turn_id, entry_id, published) VALUES (?, 'pending', 0)`,
+						`INSERT INTO turn_terminal_outbox(turn_id, entry_id, published) VALUES (?, 'published', 1)`,
+					} {
+						if _, err := store.DB().ExecContext(t.Context(), statement, thread); err != nil {
+							t.Fatal(err)
+						}
+					}
+				}
+			}
+			if tc.failTable != "" {
+				if _, err := store.DB().ExecContext(t.Context(),
+					`CREATE TRIGGER fail_delete BEFORE DELETE ON `+tc.failTable+
+						` BEGIN SELECT RAISE(ABORT, 'injected delete failure'); END`,
+				); err != nil {
+					t.Fatal(err)
+				}
+			}
+			revision := uint64(1)
+			if tc.stale {
+				revision++
+			}
+			if tc.discard {
+				_, err = repository.DiscardLifecycle(t.Context(), "deleted", revision)
+			} else {
+				_, err = repository.DeleteLifecycle(t.Context(), "deleted", revision)
+			}
+			if (err != nil) != tc.wantError {
+				t.Fatalf("delete error = %v, wantError %v", err, tc.wantError)
+			}
+			if err := store.Close(); err != nil {
+				t.Fatal(err)
+			}
+			store, err = sqlitestate.Open(t.Context(), path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, owner := range owners {
+				wantTurns := 2
+				if owner == "deleted" && !tc.wantError {
+					wantTurns = 0
+				}
+				for _, table := range append([]string{"turns"}, tables...) {
+					column := "turn_id"
+					if table == "turns" {
+						column = "id"
+					}
+					var count int
+					if err := store.DB().QueryRowContext(t.Context(),
+						`SELECT COUNT(*) FROM `+table+` WHERE `+column+` IN (?, ?)`,
+						owner, owner+"-child",
+					).Scan(&count); err != nil {
+						t.Fatal(err)
+					}
+					want := wantTurns
+					if table == "turn_terminal_outbox" {
+						want *= 2
+					}
+					if count != want {
+						t.Errorf("%s owner=%s count=%d, want %d", table, owner, count, want)
+					}
+				}
+			}
+		})
+	}
+}

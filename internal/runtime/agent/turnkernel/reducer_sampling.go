@@ -221,7 +221,20 @@ func applyModelSampleResult(
 	if !success {
 		return nil
 	}
-	if command.Text != "" {
+	// Tool-prefacing narration is presentation, not a provisional final answer.
+	// Completion declarations and convergence keep their existing output contract.
+	commentary := strings.TrimSpace(command.Text) != "" &&
+		len(command.Calls) != 0 && current.Convergence == nil &&
+		!(len(command.Calls) == 1 && command.Calls[0].Name == "turn_complete")
+	if commentary {
+		callIDs := make([]string, 0, len(command.Calls))
+		for _, call := range command.Calls {
+			callIDs = append(callIDs, call.ID)
+		}
+		transition.State.Commentary = append(transition.State.Commentary, Commentary{
+			SampleID: command.SampleID, Text: command.Text, CallIDs: callIDs,
+		})
+	} else if strings.TrimSpace(command.Text) != "" {
 		transition.State.ProvisionalOutput = append(
 			transition.State.ProvisionalOutput,
 			command.Text,
@@ -235,6 +248,7 @@ func applyModelSampleResult(
 			ToolCallsProposed{Calls: command.Calls},
 		)
 	}
+	transition.State.Progress.PendingIdentity = ""
 	return nil
 }
 
@@ -423,11 +437,23 @@ func applyObserveProgress(
 	if signature == "" {
 		return illegal(current, command, "progress signature is empty")
 	}
+	identity := strings.TrimSpace(command.SampleIdentity)
+	if identity == "" {
+		identity = current.Progress.PendingIdentity
+	}
 	progress := current.Progress
 	if command.CompletedSamples < progress.ObservedSamples {
 		return illegal(current, command, "completed samples regressed")
 	}
-	if progress.Signature == "" || progress.Signature != signature {
+	repeatedCall := progress.Signature == signature &&
+		identity != "" &&
+		identity == progress.SampleIdentity
+	// Establishing the first tool identity is not progress. Only a new Work
+	// Item signature or a switch between two non-empty identities renews.
+	identityChanged := progress.SampleIdentity != "" &&
+		identity != progress.SampleIdentity
+	if progress.Signature == "" || progress.Signature != signature ||
+		identityChanged {
 		progress.Signature = signature
 		progress.NoProgressSamples = 0
 		progress.Stage = ProgressStageNone
@@ -435,6 +461,7 @@ func applyObserveProgress(
 		progress.NoProgressSamples +=
 			command.CompletedSamples - progress.ObservedSamples
 	}
+	progress.SampleIdentity = identity
 	progress.ObservedSamples = command.CompletedSamples
 	policy := current.Policy.Convergence
 	convergeAt := policy.ProgressConverge
@@ -446,15 +473,13 @@ func applyObserveProgress(
 		finishOnlyAt = policy.ResearchFinishOnly
 		limit = policy.ResearchLimit
 	}
-	if current.WorkItem.HasKnownOrOpen() &&
-		current.Policy.ImplementNoProgressSamples > 0 {
+	if repeatedCall && current.Policy.ImplementNoProgressSamples > 0 {
 		lease := current.Policy.ImplementNoProgressSamples
 		convergeAt = max(uint32(1), lease/2)
 		finishOnlyAt = lease
-		// The implement lease is the authoritative no-progress bound: its
-		// exhaustion keeps the same repair-reserve construction as the
-		// step-limit lease, so every stage is explained by explicit
-		// configuration instead of trailing behind the step limit.
+		// The implement lease bounds identical tool-call repeats. Distinct
+		// arguments keep the MaxSteps-derived lease so verify/fix tails
+		// are not treated as stalls.
 		repairReserve := current.Policy.CompletionRepairLimit +
 			current.Policy.WorkspaceRepairLimit +
 			current.Policy.DeclarationRepairLimit +
@@ -535,11 +560,24 @@ func beginConvergence(
 	if transition.State.Convergence != nil {
 		return
 	}
+	summary := ""
+	pending := []string(nil)
+	if completion := transition.State.Completion; completion != nil {
+		summary = strings.TrimSpace(completion.Summary)
+		pending = append([]string(nil), completion.PendingActions...)
+	}
+	if summary != "" && len(pending) == 0 {
+		pending = []string{
+			"Continue the unfinished work from the retained turn context.",
+		}
+	}
 	transition.State.Convergence = &ConvergenceState{
-		Cause:      command.Cause,
-		Used:       command.Used,
-		Limit:      command.Limit,
-		RepairKind: command.RepairKind,
+		Cause:          command.Cause,
+		Used:           command.Used,
+		Limit:          command.Limit,
+		RepairKind:     command.RepairKind,
+		Summary:        summary,
+		PendingActions: pending,
 	}
 	transition.State.NextAction = StepActionFinalize
 	transition.Events = append(

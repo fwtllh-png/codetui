@@ -4,7 +4,11 @@
     "web/src/ui/styles.css",
     "web/src/ui/SettingsDialog.css",
     "web/src/ui/WorkspaceContextDialog.css",
-    "web/src/ui/Trajectory.css"
+    "web/src/ui/Trajectory.css",
+    "web/src/ui/theme/tokens.css",
+    "web/src/ui/theme/components.css",
+    "web/src/ui/primitives/primitives.css",
+    "web/src/ui/GitTools.css"
   ],
   "layout_regions": [
     "session_rail",
@@ -12,17 +16,17 @@
     "composer",
     "settings_dialog",
     "context_dialog",
-    "trajectory_inspector"
+    "trajectory_inspector",
+    "git_tools"
   ],
   "responsive_tracks": [
     {
       "mode": "compact",
       "min_width": 320,
       "max_width": 720,
-      "tracks": "56px minmax(0, 1fr)",
+      "tracks": "minmax(0, 1fr)",
       "yield_order": [
-        "session_metadata",
-        "session_search"
+        "session_rail"
       ]
     },
     {
@@ -83,10 +87,18 @@
     "--ch-motion-spin",
     "--ch-motion-panel",
     "--ch-motion-disclosure",
-    "--ch-motion-shimmer",
-    "--ch-motion-tool",
+    "--ch-motion-enter",
+    "--ch-motion-exit",
+    "--ch-motion-skeleton",
+    "--ch-motion-feedback",
+    "--ch-radius-control",
+    "--ch-success-soft",
+    "--ch-warning-soft",
+    "--ch-inspector-width",
     "--ch-motion-pending",
     "--ch-ease-in-out",
+    "--ch-ease-enter",
+    "--ch-ease-exit",
     "--ch-layer-behind",
     "--ch-layer-content",
     "--ch-layer-composer",
@@ -128,23 +140,51 @@
     {
       "id": "working_text",
       "selector": ".turnStatus",
-      "full": "text_shimmer_1800ms",
+      "full": "static_text",
       "reduced": "single_frame",
       "still": "static_text"
     },
     {
       "id": "tool_running",
       "selector": ".toolDisclosure[data-running]",
-      "full": "tool_sweep_2600ms",
+      "full": "tonal_state",
       "reduced": "single_frame",
       "still": "status_text"
     },
     {
       "id": "pending_interaction",
       "selector": ".approvalDot",
-      "full": "pending_pulse_1000ms",
+      "full": "pending_pulse_1200ms",
       "reduced": "single_frame",
       "still": "status_text"
+    },
+    {
+      "id": "disclosure",
+      "selector": ".uiCollapse",
+      "full": "grid_expand_220ms_unmount_after_exit",
+      "reduced": "immediate",
+      "still": "expanded_or_hidden"
+    },
+    {
+      "id": "git_tools",
+      "selector": ".gitTools",
+      "full": "slide_fade_enter_240ms_exit_180ms",
+      "reduced": "immediate",
+      "still": "visible_or_hidden"
+    },
+    {
+      "id": "overlay_presence",
+      "selector": ".uiPresence",
+      "full": "interruptible_enter_exit_with_inert_retained_content",
+      "reduced": "immediate_unmount",
+      "still": "visible_or_hidden"
+    },
+    {
+      "id": "loading_skeleton",
+      "selector": ".uiSkeleton",
+      "full": "opacity_pulse_1600ms",
+      "reduced": "static",
+      "still": "static"
     }
   ],
   "focus_order": [
@@ -186,7 +226,9 @@
     ".iconButton",
     ".trajectoryTimeline",
     ".ledgerRow",
-    ".recordInspector"
+    ".recordInspector",
+    ".trajectoryMetrics",
+    ".gitTools"
   ],
   "behavior": {
     "transcript_auto_follow": "only_when_near_bottom",
@@ -246,7 +288,7 @@
   ],
   "css_policy": {
     "semantic_prefix": "--ch-",
-    "max_card_radius_px": 8,
+    "max_card_radius_px": 24,
     "forbid_transition_all": true,
     "require_reduced_motion_for_infinite": true,
     "require_registered_z_index": true

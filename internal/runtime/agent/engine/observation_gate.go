@@ -12,26 +12,8 @@ import (
 
 func (e *Engine) observationGate(
 	call provider.ToolCall,
-	finishOnly bool,
+	_ bool,
 ) *tool.Result {
-	if call.Name == "git_status" || call.Name == "git_diff" {
-		item, continueTurn := e.admissionWorkItem()
-		if continueTurn || item.HasKnown() {
-			return &tool.Result{
-				Content: "git_status and git_diff are not admitted on a " +
-					"Continue or Known Work Item. Use turn_history or " +
-					"result_get for prior evidence; edit or finish the " +
-					"current Work Item.",
-				IsError: true,
-				Metadata: map[string]any{
-					"error_category":  "work_item_git_patrol_refused",
-					"required_action": item.RequiredActionOr("turn_history"),
-					"retry_original":  false,
-				},
-			}
-		}
-		return nil
-	}
 	if call.Name != "file_read" {
 		return nil
 	}
@@ -51,35 +33,7 @@ func (e *Engine) observationGate(
 		// so the refresh is explained rather than silent.
 		e.noteReadInvalidation(call.ID, invalidation)
 	}
-	if startLine > 0 {
-		return nil
-	}
-	locatedLine, located := e.locatedReadLine(path)
-	if !finishOnly && !located {
-		return nil
-	}
-	if !located {
-		locatedLine = 1
-	}
-	return &tool.Result{
-		Content: fmt.Sprintf(
-			"file_read requires a bounded window. Retry with "+
-				`{"path":%q,"start_line":%d}; `+
-				"read the located window and edit, do not page the rest of "+
-				"the file. To recover prior read text, use turn_history or "+
-				"result_get instead of re-reading the file.",
-			path,
-			locatedLine,
-		),
-		IsError: true,
-		Metadata: map[string]any{
-			"error_category":  "located_site_window_required",
-			"path":            path,
-			"required_action": "file_read",
-			"retry_original":  false,
-			"start_line":      locatedLine,
-		},
-	}
+	return nil
 }
 
 func (e *Engine) admissionWorkItem() (turnkernel.WorkItem, bool) {

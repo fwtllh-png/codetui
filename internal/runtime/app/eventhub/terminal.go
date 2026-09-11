@@ -121,7 +121,19 @@ func (p *TerminalPublisher) Commit(ctx context.Context, request TerminalRequest)
 			Kind: string(kind), Payload: payload,
 		}
 	}
-	outbox := make([]turnkernel.ProjectionOutboxEntry, 0, len(material.FrozenState.FinalOutput)+2)
+	outbox := make([]turnkernel.ProjectionOutboxEntry, 0,
+		len(material.FrozenState.Commentary)+len(material.FrozenState.FinalOutput)+2)
+	for _, message := range material.FrozenState.Commentary {
+		data := message.ProtocolData(string(turnID))
+		payload, marshalErr := json.Marshal(&data)
+		if marshalErr != nil {
+			releaseStaged()
+			return CommittedTerminal{}, marshalErr
+		}
+		projected := entry("commentary:"+message.SampleID, protocol.EventCommentaryCompleted, payload)
+		projected.EventID = CommentaryEventID(data.MessageID)
+		outbox = append(outbox, projected)
+	}
 	for index, text := range material.FrozenState.FinalOutput {
 		payload, marshalErr := json.Marshal(&protocol.OutputDeltaData{Text: text})
 		if marshalErr != nil {
@@ -335,5 +347,10 @@ func (p *TerminalPublisher) publishEntry(
 }
 func TerminalOutboxEventID(turnID protocol.TurnID, entryID string) protocol.EventID {
 	sum := sha256.Sum256([]byte("terminal-outbox\x00" + string(turnID) + "\x00" + entryID))
+	return protocol.EventID(fmt.Sprintf("evt_%x", sum[:16]))
+}
+
+func CommentaryEventID(messageID string) protocol.EventID {
+	sum := sha256.Sum256([]byte("commentary\x00" + messageID))
 	return protocol.EventID(fmt.Sprintf("evt_%x", sum[:16]))
 }

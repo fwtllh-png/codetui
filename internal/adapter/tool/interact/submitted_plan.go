@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	agentcontext "github.com/fwtllh-png/QCode/internal/runtime/agent/context"
+	"github.com/fwtllh-png/QCode/internal/runtime/protocol"
 )
 
 type SubmittedPlanStep struct {
@@ -26,21 +27,22 @@ type PlanFileBaseline struct {
 }
 
 type SubmittedPlan struct {
-	Version             int                 `json:"version"`
-	Revision            uint64              `json:"revision,omitempty"`
-	SupersedesID        string              `json:"supersedes_id,omitempty"`
-	Title               string              `json:"title,omitempty"`
-	Objective           string              `json:"objective,omitempty"`
-	ContextSummary      string              `json:"context_summary,omitempty"`
-	Steps               []SubmittedPlanStep `json:"steps"`
-	SourcesUsed         []string            `json:"sources_used,omitempty"`
-	CriticalFiles       []string            `json:"critical_files,omitempty"`
-	Constraints         []string            `json:"constraints,omitempty"`
-	RecommendedApproach string              `json:"recommended_approach,omitempty"`
-	VerificationPlan    string              `json:"verification_plan,omitempty"`
-	RisksAndUnknowns    string              `json:"risks_and_unknowns,omitempty"`
-	HandoffPacket       string              `json:"handoff_packet,omitempty"`
-	FileBaseline        []PlanFileBaseline  `json:"file_baseline,omitempty"`
+	Version             int                  `json:"version"`
+	Purpose             protocol.PlanPurpose `json:"purpose,omitempty"`
+	Revision            uint64               `json:"revision,omitempty"`
+	SupersedesID        string               `json:"supersedes_id,omitempty"`
+	Title               string               `json:"title,omitempty"`
+	Objective           string               `json:"objective,omitempty"`
+	ContextSummary      string               `json:"context_summary,omitempty"`
+	Steps               []SubmittedPlanStep  `json:"steps"`
+	SourcesUsed         []string             `json:"sources_used,omitempty"`
+	CriticalFiles       []string             `json:"critical_files,omitempty"`
+	Constraints         []string             `json:"constraints,omitempty"`
+	RecommendedApproach string               `json:"recommended_approach,omitempty"`
+	VerificationPlan    string               `json:"verification_plan,omitempty"`
+	RisksAndUnknowns    string               `json:"risks_and_unknowns,omitempty"`
+	HandoffPacket       string               `json:"handoff_packet,omitempty"`
+	FileBaseline        []PlanFileBaseline   `json:"file_baseline,omitempty"`
 }
 
 func ParseSubmittedPlan(raw []byte) (SubmittedPlan, error) {
@@ -64,6 +66,10 @@ func (p *SubmittedPlan) NormalizeAndValidate() error {
 	if p.Version != 1 {
 		return fmt.Errorf("unsupported plan version %d", p.Version)
 	}
+	if !p.Purpose.Valid() {
+		return fmt.Errorf("unsupported plan purpose %q", p.Purpose)
+	}
+	p.Purpose = p.Purpose.Normalize()
 	seen := make(map[string]struct{}, len(p.Steps))
 	for index := range p.Steps {
 		step := &p.Steps[index]

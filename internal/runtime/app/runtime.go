@@ -157,6 +157,7 @@ type Options struct {
 	SessionArtifacts    SessionArtifactStore
 	TerminalStore       turnkernel.TerminalEnvelopeStore
 	ContextRebaseStore  ContextRebaseStore
+	GitControl          *GitControl
 }
 
 type Snapshot struct {
@@ -428,6 +429,7 @@ func (r *Runtime) loop() {
 	r.cancel()
 	r.cancelActive()
 	r.workers.Wait()
+	r.titleWorkers.Wait()
 	_ = errors.Join(closeEngine(r.engine), r.hub.Close(context.Background()))
 	_ = r.content.Close(context.Background())
 	r.lifecycleMu.Lock()

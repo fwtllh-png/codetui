@@ -26,20 +26,9 @@ func applyToolCalls(
 	}
 	transition.State.Completion = nil
 	transition.State.OutputEligibility = false
-	// A lone completion declaration seals the captured narration instead of
-	// invalidating it: acceptance decides between exact replacement and
-	// preserve_provisional, and a rejected declaration keeps the body for
-	// the repair to build on rather than forcing a full rewrite.
-	loneDeclaration := len(command.Calls) == 1 &&
-		command.Calls[0].Name == "turn_complete"
-	if len(current.ProvisionalOutput) != 0 &&
-		current.Convergence == nil && !loneDeclaration {
-		transition.State.ProvisionalOutput = nil
-		transition.Events = append(
-			transition.Events,
-			Event{Kind: EventOutputDiscarded},
-		)
-	}
+	// Keep captured narration across later tool batches. A text-only sample
+	// is the stop signal; throwing the draft away forced the model to
+	// rewrite the answer inside turn_complete.
 	seen := make(map[string]struct{}, len(command.Calls))
 	for _, call := range command.Calls {
 		if strings.TrimSpace(call.ID) == "" || strings.TrimSpace(call.Name) == "" {
@@ -70,6 +59,9 @@ func applyToolCalls(
 	if current.Phase == PhaseSampling {
 		move(transition, PhaseExecutingTools)
 	}
+	transition.State.Progress.PendingIdentity = FormatToolCallsIdentity(
+		command.Calls,
+	)
 	return nil
 }
 

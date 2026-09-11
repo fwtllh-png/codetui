@@ -11,7 +11,9 @@ import {
 import {
   isValidElement,
   lazy,
+  memo,
   Suspense,
+  useDeferredValue,
   useMemo,
   useState,
   type ReactNode
@@ -33,33 +35,26 @@ const MathMarkdownMessage = lazy(async () => ({
   default: (await import("./MathMarkdownMessage")).MathMarkdownMessage
 }));
 
-export function MarkdownMessage({
+export const MarkdownMessage = memo(function MarkdownMessage({
   text,
-  settled,
-  canOpenPath,
-  onOpenFile
+  settled
 }: {
   text: string;
   settled: boolean;
-  canOpenPath: boolean;
-  onOpenFile: (path: string) => void;
 }) {
+  const deferredText = useDeferredValue(text);
   const components = useMemo<Components>(() => ({
     a: ({href, children, ...properties}) => {
       const filePath = workspacePathFromHref(href);
       if (filePath) {
         return (
-          <button
-            type="button"
+          <span
             className="markdownFileReference"
-            aria-label={`Open file ${filePath}`}
             title={filePath}
-            disabled={!canOpenPath}
-            onClick={() => onOpenFile(filePath)}
           >
             <FileCode2 size={14} aria-hidden="true" />
             <span>{children}</span>
-          </button>
+          </span>
         );
       }
       if (!href) {
@@ -89,7 +84,7 @@ export function MarkdownMessage({
         <table>{children}</table>
       </div>
     )
-  }), [canOpenPath, onOpenFile]);
+  }), []);
   if (settled && containsMath(text)) {
     return (
       <Suspense fallback={
@@ -99,10 +94,10 @@ export function MarkdownMessage({
       </Suspense>
     );
   }
-  return <BaseMarkdownMessage text={text} components={components} />;
-}
+  return <BaseMarkdownMessage text={settled ? text : deferredText} components={components} />;
+});
 
-function BaseMarkdownMessage({
+const BaseMarkdownMessage = memo(function BaseMarkdownMessage({
   text,
   components
 }: {
@@ -120,7 +115,7 @@ function BaseMarkdownMessage({
       </ReactMarkdown>
     </div>
   );
-}
+});
 
 function MarkdownCodeBlock({children}: {children?: ReactNode}) {
   const [copied, setCopied] = useState(false);

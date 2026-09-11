@@ -37,10 +37,12 @@ func (e *LifecycleRevisionConflictError) Unwrap() error {
 type LifecycleQuery = protocol.SessionListQuery
 
 type lifecycleMetadata struct {
-	Version        int               `json:"version"`
-	Revision       uint64            `json:"revision"`
-	Pinned         bool              `json:"pinned"`
-	ActiveThreadID protocol.ThreadID `json:"active_thread_id,omitempty"`
+	Version        int                         `json:"version"`
+	Revision       uint64                      `json:"revision"`
+	Pinned         bool                        `json:"pinned"`
+	ActiveThreadID protocol.ThreadID           `json:"active_thread_id,omitempty"`
+	TitleSource    protocol.SessionTitleSource `json:"title_source,omitempty"`
+	TitleRevision  uint64                      `json:"title_revision,omitempty"`
 }
 
 type profileRoute struct {
@@ -80,6 +82,8 @@ func (r *Repository) CreateLifecycle(
 			Version:        protocol.SessionLifecycleVersion,
 			Revision:       1,
 			ActiveThreadID: seed.ThreadID,
+			TitleSource:    seed.TitleSource,
+			TitleRevision:  1,
 		},
 		"provider":  seed.Provider,
 		"model":     seed.Model,
@@ -348,6 +352,8 @@ func getLifecycle(
 		return protocol.SessionSummary{}, err
 	}
 	summary.Revision = meta.Revision
+	summary.TitleSource = meta.TitleSource
+	summary.TitleRevision = meta.TitleRevision
 	summary.Pinned = meta.Pinned
 	summary.Provider = route.Provider
 	summary.Model = route.Model
@@ -587,6 +593,7 @@ func (r *Repository) UpdateLifecycle(
 			}
 		}
 		title := currentTitle
+		claimTitle := patch.Title != nil && lifecycle.TitleSource != protocol.SessionTitleManual
 		if patch.Title != nil {
 			title = strings.TrimSpace(*patch.Title)
 		}
@@ -604,12 +611,16 @@ func (r *Repository) UpdateLifecycle(
 				return err
 			}
 		}
-		if title == currentTitle && pinned == lifecycle.Pinned &&
+		if !claimTitle && title == currentTitle && pinned == lifecycle.Pinned &&
 			archived == (sessionStatus == string(StatusClosed) || threadStatus == "archived") {
 			return nil
 		}
 		lifecycle.Version = protocol.SessionLifecycleVersion
 		lifecycle.Revision++
+		if patch.Title != nil {
+			lifecycle.TitleSource = protocol.SessionTitleManual
+			lifecycle.TitleRevision++
+		}
 		lifecycle.Pinned = pinned
 		nextMetadata, err := metadataWithLifecycle(metadata, lifecycle)
 		if err != nil {
@@ -735,6 +746,23 @@ func (r *Repository) deleteLifecycle(
 				)
 			}
 		}
+		// These kernel tables have no lifecycle foreign keys. Remove their
+		// rows before the session cascade removes the owning turns.
+		for _, statement := range []string{
+			`DELETE FROM turn_terminal_outbox WHERE turn_id IN (
+				SELECT t.id FROM turns t JOIN threads th ON th.id = t.thread_id
+				WHERE th.session_id = ?)`,
+			`DELETE FROM turn_terminal_envelopes WHERE turn_id IN (
+				SELECT t.id FROM turns t JOIN threads th ON th.id = t.thread_id
+				WHERE th.session_id = ?)`,
+			`DELETE FROM turn_domain_facts WHERE turn_id IN (
+				SELECT t.id FROM turns t JOIN threads th ON th.id = t.thread_id
+				WHERE th.session_id = ?)`,
+		} {
+			if _, err := tx.ExecContext(ctx, statement, sessionID); err != nil {
+				return fmt.Errorf("delete session turn state: %w", err)
+			}
+		}
 		result, err := tx.ExecContext(ctx, `DELETE FROM sessions WHERE id = ?`, sessionID)
 		if err != nil {
 			return fmt.Errorf("delete session: %w", err)
@@ -792,8 +820,10 @@ func decodeLifecycleMetadata(
 		)
 	}
 	lifecycle := lifecycleMetadata{
-		Version:  protocol.SessionLifecycleVersion,
-		Revision: 1,
+		Version:       protocol.SessionLifecycleVersion,
+		Revision:      1,
+		TitleSource:   protocol.SessionTitleManual,
+		TitleRevision: 1,
 	}
 	if raw := values["lifecycle"]; len(raw) != 0 {
 		decoder := json.NewDecoder(bytes.NewReader(raw))
