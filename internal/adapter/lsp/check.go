@@ -192,21 +192,32 @@ func (c Checker) Analyze(ctx context.Context, files []string, changes []Change) 
 	return diagnostics, nil
 }
 
+// resolveWorkspaceRoot answers the canonical root a server session works
+// from: absolute, and carrying whatever the bound sandbox policy says the
+// workspace root is (a policy may resolve symlinks). Documents and results
+// must agree on it, or the URIs in flight stop matching the workspace.
+func resolveWorkspaceRoot(backend sandbox.Backend, workspace string) (sandbox.Backend, string, error) {
+	root, err := filepath.Abs(workspace)
+	if err != nil {
+		return nil, "", err
+	}
+	backend, err = sandbox.BindPolicy(backend, sandbox.Options{WorkspaceRoot: root})
+	if err != nil {
+		return nil, "", err
+	}
+	policy, _ := sandbox.BackendPolicy(backend)
+	return backend, policy.WorkspaceRoot, nil
+}
+
 func (c Checker) start(ctx context.Context) (*rpcClient, error) {
 	binary := c.Binary
 	if binary == "" {
 		binary = "gopls"
 	}
-	root, err := filepath.Abs(c.Root)
+	backend, root, err := resolveWorkspaceRoot(c.Sandbox, c.Root)
 	if err != nil {
 		return nil, err
 	}
-	backend, err := sandbox.BindPolicy(c.Sandbox, sandbox.Options{WorkspaceRoot: root})
-	if err != nil {
-		return nil, err
-	}
-	policy, _ := sandbox.BackendPolicy(backend)
-	root = policy.WorkspaceRoot
 	directory, err := process.OpenPinnedDirectory(backend, root)
 	if err != nil {
 		return nil, err

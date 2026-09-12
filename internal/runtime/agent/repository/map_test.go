@@ -46,7 +46,8 @@ func readyIndex(files map[string]repoindex.File, symbols []repoindex.Symbol) *st
 }
 
 func file(path, language string, symbols int) repoindex.File {
-	return repoindex.File{Path: path, Language: language, SymbolCount: symbols, Size: 100}
+	return repoindex.File{Path: path, Language: language, SymbolCount: symbols, Size: 100,
+		EntryPoint: repoindex.EntryPoint(path)}
 }
 
 func TestBuildSummarizesDirectoriesBuildFilesAndEntries(t *testing.T) {
@@ -202,5 +203,51 @@ func TestBuildReportsWhyItHasNothingToSay(t *testing.T) {
 	}, nil, Options{})
 	if pending.Status != repoindex.StatusPending || pending.Detail != "builds on first use" {
 		t.Fatalf("pending index = %+v", pending)
+	}
+}
+
+func TestBuildPrefersRankOverDeclarationCountWhenChoosingDirectories(t *testing.T) {
+	files := map[string]repoindex.File{}
+	// A generated directory holds many declarations but no rank; two wired
+	// directories hold fewer declarations but carry graph rank. The limit is
+	// two directories: rank decides membership, and only within equal rank
+	// does the declaration count speak.
+	for index := 0; index < 6; index++ {
+		path := "generated/file" + string(rune('a'+index)) + ".go"
+		files[path] = repoindex.File{Path: path, Language: "go", SymbolCount: 40,
+			EntryPoint: repoindex.EntryPoint(path)}
+	}
+	files["app/main.go"] = repoindex.File{Path: "app/main.go", Language: "go",
+		SymbolCount: 2, Rank: 0.5, EntryPoint: true}
+	files["core/core.go"] = repoindex.File{Path: "core/core.go", Language: "go",
+		SymbolCount: 3, Rank: 0.3}
+
+	built := Build(context.Background(), readyIndex(files, nil), nil,
+		Options{MaxDirectories: 2})
+	if !built.Ready() {
+		t.Fatalf("status = %q", built.Status)
+	}
+	if len(built.Directories) != 2 {
+		t.Fatalf("directories = %v", built.Directories)
+	}
+	if built.Directories[0].Path != "app" || built.Directories[1].Path != "core" {
+		t.Fatalf("ranked directories = %v, want app and core", built.Directories)
+	}
+	if built.OmittedDirectories != 1 {
+		t.Fatalf("omitted = %d, want the generated directory cut", built.OmittedDirectories)
+	}
+}
+
+func TestBuildFallsBackToDeclarationCountWithoutRanks(t *testing.T) {
+	files := map[string]repoindex.File{
+		"small/lib.go":  {Path: "small/lib.go", Language: "go", SymbolCount: 1},
+		"large/gen.go":  {Path: "large/gen.go", Language: "go", SymbolCount: 99},
+	}
+	// No ranks at all — the graph never ran. Declaration count is the
+	// previous behaviour and must remain the tiebreaker.
+	built := Build(context.Background(), readyIndex(files, nil), nil,
+		Options{MaxDirectories: 1})
+	if len(built.Directories) != 1 || built.Directories[0].Path != "large" {
+		t.Fatalf("directories = %v, want large by declaration count", built.Directories)
 	}
 }

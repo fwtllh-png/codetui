@@ -251,6 +251,11 @@ type symbolMatch struct {
 	Character int    `json:"character,omitempty"`
 	Container string `json:"container,omitempty"`
 	Exported  bool   `json:"exported"`
+	// Signature is the bounded declaration text; Resolution says which
+	// extraction tier produced the row, so a heuristic match from the generic
+	// engine never reads as a rule-table one.
+	Signature  string `json:"signature,omitempty"`
+	Resolution string `json:"resolution,omitempty"`
 }
 
 func (t *symbolTool) declarations(
@@ -284,6 +289,7 @@ func (t *symbolTool) declarations(
 		matches = append(matches, symbolMatch{
 			Name: symbol.Name, Kind: symbol.Kind, File: symbol.Path,
 			Line: symbol.Line, Container: symbol.Container, Exported: symbol.Exported,
+			Signature: symbol.Signature, Resolution: symbol.Resolution,
 		})
 	}
 	truncated := total > len(matches)
@@ -296,11 +302,11 @@ func (t *symbolTool) declarations(
 	}
 	return marshalResult(map[string]any{
 		"matches": matches, "total": total, "truncated": truncated,
-		"resolution": repoindex.Resolution, "source": "repoindex",
+		"resolution": repoindex.WeakestResolution(found), "source": "repoindex",
 		"version": repoindex.IndexerVersion, "confidence": "low",
 	}, truncated, attach(map[string]any{
 		"matches": total, "returned": len(matches),
-		"resolution": repoindex.Resolution, "index_source": snapshot.Meta.Source,
+		"resolution": repoindex.WeakestResolution(found), "index_source": snapshot.Meta.Source,
 		"index_files": snapshot.Meta.FileCount, "source": "repoindex",
 		"version": repoindex.IndexerVersion, "confidence": "low",
 	}, hits))
@@ -394,11 +400,11 @@ func (t *symbolTool) references(
 	}
 	return marshalResult(map[string]any{
 		"matches": matches, "total": total, "truncated": truncated,
-		"resolution": repoindex.Resolution, "source": "repoindex",
+		"resolution": repoindex.ResolutionLexical, "source": "repoindex",
 		"version": repoindex.IndexerVersion, "confidence": "low",
 	}, truncated, attach(map[string]any{
 		"matches": total, "returned": len(matches), "scanned_files": scanned,
-		"resolution": repoindex.Resolution, "index_source": snapshot.Meta.Source,
+		"resolution": repoindex.ResolutionLexical, "index_source": snapshot.Meta.Source,
 		"source": "repoindex", "version": repoindex.IndexerVersion, "confidence": "low",
 	}, hits))
 }
@@ -521,15 +527,19 @@ func (t *symbolTool) relatedTests(
 	}
 	sort.Strings(sources)
 	type coverage struct {
-		Source string   `json:"source"`
-		Tests  []string `json:"tests"`
+		Source string                    `json:"source"`
+		Tests  []repoindex.RelatedTest   `json:"tests"`
 	}
 	entries := make([]coverage, 0, len(sources))
 	unmapped := make([]string, 0)
 	tests := 0
+	routes := map[string]struct{}{}
 	for _, source := range sources {
 		entries = append(entries, coverage{Source: source, Tests: related[source]})
 		tests += len(related[source])
+		for _, test := range related[source] {
+			routes[test.Resolution] = struct{}{}
+		}
 	}
 	for _, source := range normalizePaths(paths) {
 		if _, found := related[source]; !found {
@@ -539,14 +549,25 @@ func (t *symbolTool) relatedTests(
 	hits := make([]tool.EvidenceHit, 0, tests)
 	for _, entry := range entries {
 		for _, test := range entry.Tests {
-			hits = append(hits, tool.EvidenceHit{Kind: tool.EvidenceTest, Path: test})
+			hits = append(hits, tool.EvidenceHit{Kind: tool.EvidenceTest, Path: test.Path})
 		}
 	}
+	// The tests say which route found them; the answer-level field says which
+	// routes spoke at all, so a graph-only answer never reads as a convention
+	// one and vice versa.
+	answer := "convention"
+	if len(routes) == 2 {
+		answer = "graph+convention"
+	} else if _, graphOnly := routes[repoindex.TestFromGraph]; graphOnly {
+		answer = "graph"
+	}
 	return marshalResult(map[string]any{
-		"coverage": entries, "unmapped": unmapped, "resolution": repoindex.Resolution,
+		"coverage": entries, "unmapped": unmapped, "impact_source": answer,
+		"resolution": repoindex.ResolutionLexical,
 	}, false, attach(map[string]any{
 		"sources": len(entries), "tests": tests, "unmapped": len(unmapped),
-		"resolution": repoindex.Resolution, "index_source": snapshot.Meta.Source,
+		"impact_source": answer,
+		"resolution": repoindex.ResolutionLexical, "index_source": snapshot.Meta.Source,
 	}, hits))
 }
 

@@ -65,6 +65,79 @@ func applyEnvironment(lookup func(string) (string, bool), config *Config, proven
 	); err != nil {
 		return err
 	}
+	if err := applyEnvInt64(
+		lookup, "QCODE_INDEX_SIGNATURE_MAX_BYTES", fieldIndexSignatureMax,
+		&index.SignatureMaxBytes, provenance,
+	); err != nil {
+		return err
+	}
+	if err := applyEnvInt64(
+		lookup, "QCODE_INDEX_DOCSTRING_MAX_BYTES", fieldIndexDocstringMax,
+		&index.DocstringMaxBytes, provenance,
+	); err != nil {
+		return err
+	}
+	if err := applyEnvInt(
+		lookup, "QCODE_INDEX_REFERENCE_MAX_COUNT", fieldIndexReferenceMax,
+		&index.ReferenceMaxCount, provenance,
+	); err != nil {
+		return err
+	}
+	if err := applyEnvFloat64(
+		lookup, "QCODE_INDEX_RANK_DAMPING_FACTOR", fieldIndexRankDamping,
+		&index.RankDamping, provenance,
+	); err != nil {
+		return err
+	}
+	if err := applyEnvInt(
+		lookup, "QCODE_INDEX_RANK_ITERATION_LIMIT", fieldIndexRankIterations,
+		&index.RankIterations, provenance,
+	); err != nil {
+		return err
+	}
+	if err := applyEnvFloat64(
+		lookup, "QCODE_INDEX_RANK_CONVERGENCE_THRESHOLD", fieldIndexRankConvergence,
+		&index.RankConvergence, provenance,
+	); err != nil {
+		return err
+	}
+	if err := applyEnvInt(
+		lookup, "QCODE_INDEX_IMPACT_MAX_DEPTH", fieldIndexImpactDepth,
+		&index.ImpactMaxDepth, provenance,
+	); err != nil {
+		return err
+	}
+	if err := applyEnvInt(
+		lookup, "QCODE_INDEX_IMPACT_MAX_RESULTS", fieldIndexImpactResults,
+		&index.ImpactMaxResults, provenance,
+	); err != nil {
+		return err
+	}
+	lspConfig := &config.Context.LSP
+	if err := applyEnvBool(
+		lookup, "QCODE_LSP_RESIDENT_ENABLED", fieldLSPResidentEnabled,
+		&lspConfig.ResidentEnabled, provenance,
+	); err != nil {
+		return err
+	}
+	if err := applyEnvDuration(
+		lookup, "QCODE_LSP_IDLE_TIMEOUT", fieldLSPIdleTimeout,
+		&lspConfig.IdleTimeout, provenance,
+	); err != nil {
+		return err
+	}
+	if err := applyEnvInt(
+		lookup, "QCODE_LSP_MAX_SERVERS", fieldLSPMaxServers,
+		&lspConfig.MaxServers, provenance,
+	); err != nil {
+		return err
+	}
+	if err := applyEnvInt(
+		lookup, "QCODE_LSP_CACHE_CAPACITY", fieldLSPCacheCapacity,
+		&lspConfig.CacheCapacity, provenance,
+	); err != nil {
+		return err
+	}
 	repoMap := &config.Context.RepoMap
 	if err := applyEnvBool(
 		lookup, "QCODE_REPO_MAP_ENABLED", fieldRepoMapEnabled, &repoMap.Enabled, provenance,

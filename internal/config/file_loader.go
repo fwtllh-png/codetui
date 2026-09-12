@@ -102,10 +102,24 @@ type fileConfig struct {
 	} `toml:"memory"`
 	Context struct {
 		Index struct {
-			Enabled      *bool  `toml:"enabled"`
-			MaxFileBytes *int64 `toml:"max_file_bytes"`
-			MaxFiles     *int   `toml:"max_files"`
+			Enabled           *bool  `toml:"enabled"`
+			MaxFileBytes      *int64 `toml:"max_file_bytes"`
+			MaxFiles          *int   `toml:"max_files"`
+			SignatureMaxBytes     *int64   `toml:"signature_max_bytes"`
+			DocstringMaxBytes     *int64   `toml:"docstring_max_bytes"`
+			ReferenceMaxCount     *int     `toml:"reference_max_count"`
+			RankDamping           *float64 `toml:"rank_damping_factor"`
+			RankIterations        *int     `toml:"rank_iteration_limit"`
+			RankConvergence       *float64 `toml:"rank_convergence_threshold"`
+			ImpactMaxDepth        *int     `toml:"impact_max_depth"`
+			ImpactMaxResults      *int     `toml:"impact_max_results"`
 		} `toml:"index"`
+		LSP struct {
+			ResidentEnabled *bool   `toml:"resident_enabled"`
+			IdleTimeout     *string `toml:"idle_timeout"`
+			MaxServers      *int    `toml:"max_servers"`
+			CacheCapacity   *int    `toml:"cache_capacity"`
+		} `toml:"lsp"`
 		RepoMap struct {
 			Enabled        *bool `toml:"enabled"`
 			MaxBytes       *int  `toml:"max_bytes"`
@@ -207,6 +221,18 @@ func applyFile(
 	applyBool(input.Context.Index.Enabled, &index.Enabled, fieldIndexEnabled, source, provenance)
 	applyInt64(input.Context.Index.MaxFileBytes, &index.MaxFileBytes, fieldIndexMaxBytes, source, provenance)
 	applyInt(input.Context.Index.MaxFiles, &index.MaxFiles, fieldIndexMaxFiles, source, provenance)
+	applyInt64(input.Context.Index.SignatureMaxBytes, &index.SignatureMaxBytes, fieldIndexSignatureMax, source, provenance)
+	applyInt64(input.Context.Index.DocstringMaxBytes, &index.DocstringMaxBytes, fieldIndexDocstringMax, source, provenance)
+	applyInt(input.Context.Index.ReferenceMaxCount, &index.ReferenceMaxCount, fieldIndexReferenceMax, source, provenance)
+	applyFloat64(input.Context.Index.RankDamping, &index.RankDamping, fieldIndexRankDamping, source, provenance)
+	applyInt(input.Context.Index.RankIterations, &index.RankIterations, fieldIndexRankIterations, source, provenance)
+	applyFloat64(input.Context.Index.RankConvergence, &index.RankConvergence, fieldIndexRankConvergence, source, provenance)
+	applyInt(input.Context.Index.ImpactMaxDepth, &index.ImpactMaxDepth, fieldIndexImpactDepth, source, provenance)
+	applyInt(input.Context.Index.ImpactMaxResults, &index.ImpactMaxResults, fieldIndexImpactResults, source, provenance)
+	applyBool(input.Context.LSP.ResidentEnabled, &config.Context.LSP.ResidentEnabled, fieldLSPResidentEnabled, source, provenance)
+	applyDurationString(input.Context.LSP.IdleTimeout, &config.Context.LSP.IdleTimeout, fieldLSPIdleTimeout, source, provenance)
+	applyInt(input.Context.LSP.MaxServers, &config.Context.LSP.MaxServers, fieldLSPMaxServers, source, provenance)
+	applyInt(input.Context.LSP.CacheCapacity, &config.Context.LSP.CacheCapacity, fieldLSPCacheCapacity, source, provenance)
 	repoMap := &config.Context.RepoMap
 	applyBool(input.Context.RepoMap.Enabled, &repoMap.Enabled, fieldRepoMapEnabled, source, provenance)
 	applyInt(input.Context.RepoMap.MaxBytes, &repoMap.MaxBytes, fieldRepoMapMaxBytes, source, provenance)

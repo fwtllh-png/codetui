@@ -25,7 +25,34 @@ func Defaults() Config {
 		},
 
 		Context: Context{
-			Index: Index{Enabled: true, MaxFileBytes: 1 << 20, MaxFiles: 20000},
+			Index: Index{
+				Enabled: true, MaxFileBytes: 1 << 20, MaxFiles: 20000,
+				// The detail bounds keep one pathological file from turning
+				// the index into a copy of its own source; the defaults hold a
+				// long parameter list, a full comment block, and the distinct
+				// identifiers of a large generated file respectively.
+				SignatureMaxBytes: 512, DocstringMaxBytes: 2048,
+				ReferenceMaxCount: 4096,
+				// Damping 0.85 is the PageRank standard (Brin & Page,
+				// 1998); 100 iterations and a 1e-6 total-movement stop
+				// converge long before the limit on repository-scale
+				// graphs and bound the loop on pathological ones.
+				RankDamping: 0.85, RankIterations: 100,
+				RankConvergence: 1e-6,
+				// Three hops cover a direct dependent, its dependents and
+				// one more layer; beyond that a lexical graph's
+				// name-coincidence error grows faster than its recall.
+				ImpactMaxDepth: 3, ImpactMaxResults: 200,
+			},
+
+			LSP: LSP{
+				// Off by default: a resident language server is a host
+				// process and must be asked for explicitly. The bounds,
+				// when it is on: a ten-minute idle window, two servers,
+				// 256 remembered answers.
+				IdleTimeout: 10 * time.Minute, MaxServers: 2,
+				CacheCapacity: 256,
+			},
 
 			RepoMap:    RepoMap{Enabled: true, MaxBytes: 8 << 10, MaxDirectories: 24},
 			WorkingSet: WorkingSet{Enabled: true, MaxEntries: 16, MaxBytes: 8 << 10},

@@ -20,31 +20,55 @@ import (
 )
 
 // File is one indexed file. Size and Modified together are the cheap hint that a
-// file has not changed; Digest is what actually decides it.
+// file has not changed; Digest is what actually decides it. Rank is the file's
+// PageRank from the reference graph — zero until a graph build has run, which
+// is the map's signal to fall back to declaration counts. EntryPoint records
+// the entry-point classification so every consumer of the index answers it the
+// same way.
 type File struct {
 	Path        string `json:"path"`
 	Language    string `json:"language,omitempty"`
 	Size        int64  `json:"size"`
 	Digest      string `json:"digest"`
 	SymbolCount int    `json:"symbol_count"`
+	Rank        float64 `json:"rank,omitempty"`
+	EntryPoint  bool   `json:"entry_point,omitempty"`
 	Modified    time.Time
 	IndexedAt   time.Time
 }
 
-// Symbol is one declaration the extractor found. Line is 1-based.
+// Symbol is one declaration the extractor found. Line is 1-based. Signature
+// and Docstring are the bounded declaration text and comment block; Resolution
+// says which extraction tier produced the row, and consumers pass it on rather
+// than present a heuristic row as a rule-table one.
 type Symbol struct {
-	Path      string `json:"path"`
-	Name      string `json:"name"`
-	Kind      string `json:"kind"`
-	Container string `json:"container,omitempty"`
-	Line      int    `json:"line"`
-	Exported  bool   `json:"exported,omitempty"`
+	Path       string `json:"path"`
+	Name       string `json:"name"`
+	Kind       string `json:"kind"`
+	Container  string `json:"container,omitempty"`
+	Line       int    `json:"line"`
+	Exported   bool   `json:"exported,omitempty"`
+	Signature  string `json:"signature,omitempty"`
+	Docstring  string `json:"docstring,omitempty"`
+	Resolution string `json:"resolution,omitempty"`
+}
+
+// Reference is one identifier a file uses, with how often. The rows are the
+// raw material for reference edges; they say which names appear where, not
+// what declared them.
+type Reference struct {
+	Name  string `json:"name"`
+	Count int    `json:"count"`
 }
 
 // Record is a file together with the declarations it holds.
 type Record struct {
-	File    File
-	Symbols []Symbol
+	File       File
+	Symbols    []Symbol
+	References []Reference
+	// Imports are the raw import specifiers the extractor read; the graph
+	// build resolves them once the file set is complete.
+	Imports []string
 }
 
 // Meta describes the state of one root's index.
@@ -158,11 +182,17 @@ func (s *Store) SetMeta(ctx context.Context, meta Meta) error {
 }
 
 // Files returns the indexed files by path, which is how an incremental refresh
-// learns which digests it already holds.
+// learns which digests it already holds. Each row carries its graph rank when
+// one has been computed.
 func (s *Store) Files(ctx context.Context) (map[string]File, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT path, language, size_bytes, modified_unix_nano, digest, symbol_count, indexed_at
-		FROM repo_index_files WHERE root_path = ?`, s.root)
+		SELECT f.path, f.language, f.size_bytes, f.modified_unix_nano, f.digest,
+			f.symbol_count, f.indexed_at, f.entry_point,
+			IFNULL(r.rank, 0)
+		FROM repo_index_files f
+		LEFT JOIN repo_index_file_rank r
+			ON r.root_path = f.root_path AND r.path = f.path
+		WHERE f.root_path = ?`, s.root)
 	if err != nil {
 		return nil, fmt.Errorf("read repository index files: %w", err)
 	}
@@ -170,13 +200,15 @@ func (s *Store) Files(ctx context.Context) (map[string]File, error) {
 	files := make(map[string]File)
 	for rows.Next() {
 		var (
-			file      File
-			modified  int64
-			indexedAt string
+			file       File
+			modified   int64
+			indexedAt  string
+			entryPoint int
 		)
 		if err := rows.Scan(
 			&file.Path, &file.Language, &file.Size, &modified,
-			&file.Digest, &file.SymbolCount, &indexedAt,
+			&file.Digest, &file.SymbolCount, &indexedAt, &entryPoint,
+			&file.Rank,
 		); err != nil {
 			return nil, fmt.Errorf("read repository index files: %w", err)
 		}
@@ -184,6 +216,7 @@ func (s *Store) Files(ctx context.Context) (map[string]File, error) {
 			return nil, fmt.Errorf("read repository index files: %w", err)
 		}
 		file.Modified = time.Unix(0, modified)
+		file.EntryPoint = entryPoint != 0
 		files[file.Path] = file
 	}
 	if err := rows.Err(); err != nil {
@@ -235,6 +268,10 @@ func (s *Store) Reset(ctx context.Context) error {
 	return s.withTx(ctx, func(tx *sql.Tx) error {
 		for _, statement := range []string{
 			`DELETE FROM repo_index_symbols WHERE root_path = ?`,
+			`DELETE FROM repo_index_references WHERE root_path = ?`,
+			`DELETE FROM repo_index_imports WHERE root_path = ?`,
+			`DELETE FROM repo_index_edges WHERE root_path = ?`,
+			`DELETE FROM repo_index_file_rank WHERE root_path = ?`,
 			`DELETE FROM repo_index_files WHERE root_path = ?`,
 			`DELETE FROM repo_index_meta WHERE root_path = ?`,
 		} {
@@ -259,7 +296,8 @@ func (s *Store) Symbols(ctx context.Context, query Query) ([]Symbol, error) {
 	}
 	statement := strings.Builder{}
 	statement.WriteString(`
-		SELECT path, name, kind, container, line, exported
+		SELECT path, name, kind, container, line, exported,
+			signature, docstring, resolution
 		FROM repo_index_symbols WHERE root_path = ?`)
 	arguments := []any{s.root}
 	if name := strings.TrimSpace(query.Name); name != "" {
@@ -300,6 +338,7 @@ func (s *Store) Symbols(ctx context.Context, query Query) ([]Symbol, error) {
 		if err := rows.Scan(
 			&symbol.Path, &symbol.Name, &symbol.Kind,
 			&symbol.Container, &symbol.Line, &exported,
+			&symbol.Signature, &symbol.Docstring, &symbol.Resolution,
 		); err != nil {
 			return nil, fmt.Errorf("query repository index symbols: %w", err)
 		}
@@ -347,23 +386,28 @@ func (s *Store) applyRecord(ctx context.Context, tx *sql.Tx, record Record) erro
 	if strings.TrimSpace(file.Path) == "" {
 		return errors.New("indexed file requires a path")
 	}
+	entryPoint := 0
+	if file.EntryPoint {
+		entryPoint = 1
+	}
 	if file.IndexedAt.IsZero() {
 		file.IndexedAt = time.Now()
 	}
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO repo_index_files(
 			root_path, path, language, size_bytes, modified_unix_nano,
-			digest, symbol_count, indexed_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+			digest, symbol_count, indexed_at, entry_point
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(root_path, path) DO UPDATE SET
 			language = excluded.language,
 			size_bytes = excluded.size_bytes,
 			modified_unix_nano = excluded.modified_unix_nano,
 			digest = excluded.digest,
 			symbol_count = excluded.symbol_count,
-			indexed_at = excluded.indexed_at`,
+			indexed_at = excluded.indexed_at,
+			entry_point = excluded.entry_point`,
 		s.root, file.Path, file.Language, file.Size, file.Modified.UnixNano(),
-		file.Digest, len(record.Symbols), timestamp(file.IndexedAt),
+		file.Digest, len(record.Symbols), timestamp(file.IndexedAt), entryPoint,
 	); err != nil {
 		return fmt.Errorf("write repository index file: %w", err)
 	}
@@ -372,6 +416,16 @@ func (s *Store) applyRecord(ctx context.Context, tx *sql.Tx, record Record) erro
 	); err != nil {
 		return fmt.Errorf("replace repository index symbols: %w", err)
 	}
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM repo_index_references WHERE root_path = ? AND path = ?`, s.root, file.Path,
+	); err != nil {
+		return fmt.Errorf("replace repository index references: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM repo_index_imports WHERE root_path = ? AND path = ?`, s.root, file.Path,
+	); err != nil {
+		return fmt.Errorf("replace repository index imports: %w", err)
+	}
 	for _, symbol := range record.Symbols {
 		exported := 0
 		if symbol.Exported {
@@ -379,12 +433,34 @@ func (s *Store) applyRecord(ctx context.Context, tx *sql.Tx, record Record) erro
 		}
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO repo_index_symbols(
-				root_path, path, name, kind, container, line, exported
-			) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+				root_path, path, name, kind, container, line, exported,
+				signature, docstring, resolution
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			s.root, file.Path, symbol.Name, symbol.Kind,
 			symbol.Container, symbol.Line, exported,
+			symbol.Signature, symbol.Docstring, symbol.Resolution,
 		); err != nil {
 			return fmt.Errorf("write repository index symbol: %w", err)
+		}
+	}
+	for _, reference := range record.References {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO repo_index_references(
+				root_path, path, name, use_count
+			) VALUES (?, ?, ?, ?)`,
+			s.root, file.Path, reference.Name, reference.Count,
+		); err != nil {
+			return fmt.Errorf("write repository index reference: %w", err)
+		}
+	}
+	for position, spec := range record.Imports {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO repo_index_imports(
+				root_path, path, position, spec
+			) VALUES (?, ?, ?, ?)`,
+			s.root, file.Path, position, spec,
+		); err != nil {
+			return fmt.Errorf("write repository index import: %w", err)
 		}
 	}
 	return nil
@@ -423,4 +499,127 @@ func escapeLike(value string) string {
 
 func timestamp(value time.Time) string {
 	return value.UTC().Format(time.RFC3339Nano)
+}
+
+// Imports returns the raw import specifiers recorded per file, in the order
+// the extractor read them. The graph build resolves them against the file set.
+func (s *Store) Imports(ctx context.Context) (map[string][]string, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT path, spec FROM repo_index_imports WHERE root_path = ?
+		ORDER BY path, position`, s.root)
+	if err != nil {
+		return nil, fmt.Errorf("read repository index imports: %w", err)
+	}
+	defer rows.Close()
+	specs := make(map[string][]string)
+	for rows.Next() {
+		var path, spec string
+		if err := rows.Scan(&path, &spec); err != nil {
+			return nil, fmt.Errorf("read repository index imports: %w", err)
+		}
+		specs[path] = append(specs[path], spec)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read repository index imports: %w", err)
+	}
+	return specs, nil
+}
+
+// ReplaceEdges swaps the graph rows for the root. The graph is wholly derived
+// from symbols, references and imports, so replacing beats merging.
+func (s *Store) ReplaceEdges(ctx context.Context, edges []graphEdge) error {
+	return s.withTx(ctx, func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx,
+			`DELETE FROM repo_index_edges WHERE root_path = ?`, s.root,
+		); err != nil {
+			return fmt.Errorf("replace repository index edges: %w", err)
+		}
+		for _, edge := range edges {
+			if _, err := tx.ExecContext(ctx, `
+				INSERT INTO repo_index_edges(
+					root_path, src_path, dst_path, kind, weight
+				) VALUES (?, ?, ?, ?, ?)`,
+				s.root, edge.Src, edge.Dst, edge.Kind, edge.Weight,
+			); err != nil {
+				return fmt.Errorf("write repository index edge: %w", err)
+			}
+		}
+		return nil
+	})
+}
+
+// ReplaceRanks records the file ranks of one graph build.
+func (s *Store) ReplaceRanks(ctx context.Context, ranks map[string]float64) error {
+	return s.withTx(ctx, func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx,
+			`DELETE FROM repo_index_file_rank WHERE root_path = ?`, s.root,
+		); err != nil {
+			return fmt.Errorf("replace repository index ranks: %w", err)
+		}
+		for path, rank := range ranks {
+			if _, err := tx.ExecContext(ctx, `
+				INSERT INTO repo_index_file_rank(root_path, path, rank)
+				VALUES (?, ?, ?)`,
+				s.root, path, rank,
+			); err != nil {
+				return fmt.Errorf("write repository index rank: %w", err)
+			}
+		}
+		return nil
+	})
+}
+
+// Edges returns the stored graph rows for the root, sorted for determinism.
+// Impact analysis (proposal R4) consumes the same rows the ranks were built
+// from.
+func (s *Store) Edges(ctx context.Context) ([]graphEdge, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT src_path, dst_path, kind, weight
+		FROM repo_index_edges WHERE root_path = ?
+		ORDER BY src_path, dst_path, kind`, s.root)
+	if err != nil {
+		return nil, fmt.Errorf("read repository index edges: %w", err)
+	}
+	defer rows.Close()
+	var edges []graphEdge
+	for rows.Next() {
+		var edge graphEdge
+		if err := rows.Scan(&edge.Src, &edge.Dst, &edge.Kind, &edge.Weight); err != nil {
+			return nil, fmt.Errorf("read repository index edges: %w", err)
+		}
+		edges = append(edges, edge)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read repository index edges: %w", err)
+	}
+	return edges, nil
+}
+
+// referenceEdges joins the identifier counts against the symbol table: a file
+// that uses a name declared elsewhere in the repository references the
+// declaring file, with the use count as the edge weight. The join runs where
+// both tables and their name indexes live.
+func (s *Store) referenceEdges(ctx context.Context) []graphEdge {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT r.path AS src, s.path AS dst, SUM(r.use_count) AS weight
+		FROM repo_index_references r
+		JOIN repo_index_symbols s
+			ON s.root_path = r.root_path AND s.name = r.name
+		WHERE r.root_path = ? AND r.path <> s.path
+		GROUP BY r.path, s.path
+		ORDER BY r.path, s.path`, s.root)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	var edges []graphEdge
+	for rows.Next() {
+		var edge graphEdge
+		edge.Kind = EdgeReference
+		if err := rows.Scan(&edge.Src, &edge.Dst, &edge.Weight); err != nil {
+			return nil
+		}
+		edges = append(edges, edge)
+	}
+	return edges
 }

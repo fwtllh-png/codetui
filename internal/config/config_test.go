@@ -1,6 +1,7 @@
 package config
 
 import (
+	"time"
 	"encoding/json"
 	"errors"
 	"os"
@@ -10,7 +11,6 @@ import (
 	"strconv"
 	"strings"
 	"testing"
-	"time"
 )
 
 func TestDefaultsUseExtendedTurnBudget(t *testing.T) {
@@ -902,12 +902,33 @@ args = ["--no-globs", "--", "{path}"]
 	}
 }
 
+func TestLSPDefaultsKeepResidentSessionsOff(t *testing.T) {
+	defaults, err := Load(LoadOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lspConfig := defaults.Config.Context.LSP
+	// A resident language server is a host process: nothing runs until a
+	// configuration explicitly says so, and the bounds a session would use
+	// are the documented defaults.
+	if lspConfig.ResidentEnabled {
+		t.Fatal("resident sessions must default to off")
+	}
+	if lspConfig.IdleTimeout != 10*time.Minute || lspConfig.MaxServers != 2 ||
+		lspConfig.CacheCapacity != 256 {
+		t.Fatalf("lsp defaults = %+v", lspConfig)
+	}
+}
+
 func TestIndexConfigResolvesAcrossSourcesAndBoundsItsCeilings(t *testing.T) {
 	defaults, err := Load(LoadOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := Index{Enabled: true, MaxFileBytes: 1 << 20, MaxFiles: 20000}
+	want := Index{Enabled: true, MaxFileBytes: 1 << 20, MaxFiles: 20000,
+		SignatureMaxBytes: 512, DocstringMaxBytes: 2048, ReferenceMaxCount: 4096,
+		RankDamping: 0.85, RankIterations: 100, RankConvergence: 1e-6,
+		ImpactMaxDepth: 3, ImpactMaxResults: 200}
 	if defaults.Config.Context.Index != want {
 		t.Fatalf("default index = %+v, want %+v", defaults.Config.Context.Index, want)
 	}

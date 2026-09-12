@@ -1,11 +1,19 @@
 // Package symbols finds the declarations in a source file by reading its lines.
 //
-// It is deliberately lexical, not semantic: there is no parser, no type
-// resolution and no build. That buys support for every language from one small
-// rule table and keeps indexing a whole repository cheap, at the cost of the
-// errors a lexer makes — a declaration written inside a string literal is
-// reported, a macro that generates one is not. Consumers must label results
-// accordingly rather than present them as ground truth.
+// Extraction is layered so that every language has a baseline rather than only
+// the ones with a hand-tuned rule table:
+//
+//   - Tier 0, a generic engine of shared declaration shapes, runs for any
+//     language and reports ResolutionHeuristic.
+//   - Tier 1, the per-language rule tables, runs for the languages below and
+//     reports ResolutionLexical.
+//
+// Both tiers are deliberately lexical, not semantic: there is no parser, no
+// type resolution and no build. That buys support for every language from one
+// small table per tier and keeps indexing a whole repository cheap, at the cost
+// of the errors a lexer makes — a declaration written inside a string literal
+// is reported, a macro that generates one is not. Consumers must pass the
+// resolution on rather than present any tier as ground truth.
 package symbols
 
 import (
@@ -27,7 +35,20 @@ const (
 	KindVar       = "var"
 )
 
-// Languages this package can extract declarations from.
+// Resolution labels how a row was produced, so a consumer can tell a
+// hand-tuned rule table from the generic fallback. The values are ordered by
+// trust: a helper that aggregates rows reports the weakest one it saw.
+const (
+	// ResolutionHeuristic is the generic engine: shared declaration shapes
+	// applied to a language without a rule table. It is the floor every
+	// language gets, never a claim about the language itself.
+	ResolutionHeuristic = "heuristic"
+	// ResolutionLexical is a per-language rule table.
+	ResolutionLexical = "lexical"
+)
+
+// Languages with a Tier 1 rule table. Languages known by name but absent from
+// this list (ruby, shell, ...) are still indexed through the generic engine.
 const (
 	LanguageGo         = "go"
 	LanguagePython     = "python"
@@ -35,16 +56,74 @@ const (
 	LanguageTypeScript = "typescript"
 	LanguageRust       = "rust"
 	LanguageJava       = "java"
+	LanguageC          = "c"
+	LanguageCPP        = "cpp"
 )
 
+// LanguageGeneric names the tier every language falls back to. It is what the
+// index records for a file whose extension and shebang say nothing.
+const LanguageGeneric = "generic"
+
 // Symbol is one declaration. Line is 1-based so it can be shown to a reader
-// without adjustment.
+// without adjustment. Signature and Docstring carry the declaration text and
+// the comment block glued to it, each bounded by the caller's Options; a symbol
+// whose extraction produced neither keeps them empty.
 type Symbol struct {
-	Name      string
-	Kind      string
-	Container string
-	Line      int
-	Exported  bool
+	Name       string
+	Kind       string
+	Container  string
+	Line       int
+	Exported   bool
+	Signature  string
+	Docstring  string
+	Resolution string
+}
+
+// Reference counts one identifier the file uses. It is file-level, not
+// symbol-level, because a reference says where to look next, not what declared
+// it; graphs built from these rows (proposal R2) join them against the symbol
+// table themselves.
+type Reference struct {
+	Name  string
+	Count int
+}
+
+// Result is everything one file yielded.
+type Result struct {
+	Symbols    []Symbol
+	References []Reference
+}
+
+// Options bound the detail one extraction records. Zero selects the defaults;
+// the bounds keep a pathological file from turning the index into a copy of
+// its own source. Callers expose them as configuration with provenance.
+type Options struct {
+	// SignatureMaxBytes bounds the recorded declaration text.
+	SignatureMaxBytes int
+	// DocstringMaxBytes bounds the recorded comment block.
+	DocstringMaxBytes int
+	// ReferenceMaxCount bounds how many distinct identifiers one file records.
+	ReferenceMaxCount int
+}
+
+// Defaults for options left unset.
+const (
+	DefaultSignatureMaxBytes = 512
+	DefaultDocstringMaxBytes = 2048
+	DefaultReferenceMaxCount = 4096
+)
+
+func (o Options) withDefaults() Options {
+	if o.SignatureMaxBytes <= 0 {
+		o.SignatureMaxBytes = DefaultSignatureMaxBytes
+	}
+	if o.DocstringMaxBytes <= 0 {
+		o.DocstringMaxBytes = DefaultDocstringMaxBytes
+	}
+	if o.ReferenceMaxCount <= 0 {
+		o.ReferenceMaxCount = DefaultReferenceMaxCount
+	}
+	return o
 }
 
 // maxLines bounds how much of a file is scanned. Generated files run to hundreds
@@ -53,7 +132,8 @@ type Symbol struct {
 const maxLines = 50000
 
 // languagesByExtension maps a file extension to its language. Extensions absent
-// here are still indexed as files, only without declarations.
+// here fall through DetectLanguage's shebang check and then to the generic
+// engine, so an unlisted language yields heuristic rows rather than none.
 var languagesByExtension = map[string]string{
 	".go":   LanguageGo,
 	".py":   LanguagePython,
@@ -67,20 +147,96 @@ var languagesByExtension = map[string]string{
 	".mts":  LanguageTypeScript,
 	".rs":   LanguageRust,
 	".java": LanguageJava,
+	// C and C++ share one rule table; the names stay distinct so a query can
+	// still tell which files are which.
+	".c":    LanguageC,
+	".h":    LanguageC,
+	".cc":   LanguageCPP,
+	".cp":   LanguageCPP,
+	".cpp":  LanguageCPP,
+	".cxx":  LanguageCPP,
+	".c++":  LanguageCPP,
+	".hpp":  LanguageCPP,
+	".hh":   LanguageCPP,
+	".hxx":  LanguageCPP,
+	".h++":  LanguageCPP,
+	".ipp":  LanguageCPP,
+	".tpp":  LanguageCPP,
+	// Known languages without a rule table yet. Recording the real name keeps
+	// per-language queries meaningful; extraction falls to the generic engine
+	// and the rows carry ResolutionHeuristic.
+	".cs":       "csharp",
+	".csx":      "csharp",
+	".rb":       "ruby",
+	".php":      "php",
+	".kt":       "kotlin",
+	".kts":      "kotlin",
+	".swift":    "swift",
+	".scala":    "scala",
+	".sc":       "scala",
+	".m":        "objective-c",
+	".mm":       "objective-cpp",
+	".sh":       "shell",
+	".bash":     "shell",
+	".zsh":      "shell",
+	".fish":     "shell",
+	".lua":      "lua",
+	".pl":       "perl",
+	".pm":       "perl",
+	".r":        "r",
+	".jl":       "julia",
+	".ex":       "elixir",
+	".exs":      "elixir",
+	".erl":      "erlang",
+	".hrl":      "erlang",
+	".hs":       "haskell",
+	".ml":       "ocaml",
+	".mli":      "ocaml",
+	".zig":      "zig",
+	".d":        "d",
+	".groovy":   "groovy",
+	".gradle":   "groovy",
+	".dart":     "dart",
+	".vue":      "vue",
+	".svelte":   "svelte",
+	".el":       "emacs-lisp",
+	".clj":      "clojure",
+	".cljs":     "clojure",
+	".rkt":      "racket",
+	".scm":      "scheme",
+	".f90":      "fortran",
+	".f95":      "fortran",
+	".pas":      "pascal",
+	".asm":      "assembly",
+	".s":        "assembly",
+	".sql":      "sql",
+	".proto":    "protobuf",
+	".graphql":  "graphql",
+	".gql":      "graphql",
+	".tf":       "terraform",
+	".hcl":      "hcl",
+	".vim":      "vimscript",
+	".nim":      "nim",
+	".v":        "verilog",
+	".sv":       "systemverilog",
 }
 
-// extractors holds one line scanner per supported language.
-var extractors = map[string]func([]line) []Symbol{
+// extractors holds one Tier 1 scanner per rule-table language.
+var extractors = map[string]func([]line, Options) []Symbol{
 	LanguageGo:         extractGo,
 	LanguagePython:     extractPython,
 	LanguageJavaScript: extractBraces,
 	LanguageTypeScript: extractBraces,
 	LanguageRust:       extractRust,
 	LanguageJava:       extractJava,
+	LanguageC:          extractCPP,
+	LanguageCPP:        extractCPP,
 }
 
 // Language returns the language of path, or an empty string when the extension
-// is unknown.
+// is unknown. An empty answer does not mean the file is skipped: it means
+// DetectLanguage still has a shebang to check and the generic engine to fall
+// back on.
 func Language(path string) string {
 	lowered := strings.ToLower(path)
 	if index := strings.LastIndexByte(lowered, '.'); index >= 0 {
@@ -89,21 +245,82 @@ func Language(path string) string {
 	return ""
 }
 
-// Supported reports whether declarations can be extracted for a language.
-func Supported(language string) bool {
-	_, found := extractors[language]
-	return found
+// DetectLanguage names the language of a file from its path first and its
+// shebang second. An empty result means "not identified", which callers record
+// as LanguageGeneric.
+func DetectLanguage(path string, data []byte) string {
+	if language := Language(path); language != "" {
+		return language
+	}
+	return languageOfShebang(data)
 }
 
-// Extract returns the declarations of data, in the order they appear. An
-// unsupported language yields no symbols rather than an error: the file is still
-// worth indexing, it just has nothing to declare.
-func Extract(language string, data []byte) []Symbol {
-	extractor, found := extractors[language]
-	if !found {
-		return nil
+// languageOfShebang reads the first line for an interpreter. Only the forms a
+// declaration index can use are recognised; an unknown interpreter keeps its
+// empty answer rather than being guessed at.
+func languageOfShebang(data []byte) string {
+	first := data
+	if index := strings.IndexByte(string(data), '\n'); index >= 0 {
+		first = data[:index]
 	}
-	return extractor(scan(language, data))
+	line := strings.TrimSpace(string(first))
+	if !strings.HasPrefix(line, "#!") {
+		return ""
+	}
+	line = strings.TrimPrefix(line, "#!")
+	line = strings.TrimSpace(line)
+	// Strip the direct path form (/usr/bin/python3) to its last segment, and
+	// the env form (env -S python3) to its last non-flag word.
+	fields := strings.FieldsFunc(line, func(r rune) bool {
+		return r == '/' || r == ' ' || r == '\t'
+	})
+	if len(fields) == 0 {
+		return ""
+	}
+	last := fields[len(fields)-1]
+	switch {
+	case strings.HasPrefix(last, "python"):
+		return LanguagePython
+	case strings.HasPrefix(last, "node"):
+		return LanguageJavaScript
+	case strings.HasPrefix(last, "ruby"):
+		return "ruby"
+	case strings.HasPrefix(last, "perl"):
+		return "perl"
+	case last == "sh" || last == "bash" || last == "zsh" || last == "dash" ||
+		last == "fish" || last == "ksh":
+		return "shell"
+	}
+	return ""
+}
+
+// Supported reports whether declarations can be extracted for a language.
+// Every language is supported: the question is only which tier answers, and
+// the resolution on each row says so.
+func Supported(language string) bool {
+	return true
+}
+
+// Extract returns the declarations of data, in the order they appear. It keeps
+// the Options-free call sites of earlier milestones; ExtractResult is the full
+// form. A language without a rule table yields the generic engine's heuristic
+// rows rather than none.
+func Extract(language string, data []byte) []Symbol {
+	return ExtractResult(language, data, Options{}).Symbols
+}
+
+// ExtractResult returns the declarations and file-level references of data.
+func ExtractResult(language string, data []byte, options Options) Result {
+	options = options.withDefaults()
+	lines := scan(language, data)
+	result := Result{}
+	if extractor, found := extractors[language]; found {
+		result.Symbols = extractor(lines, options)
+	} else {
+		result.Symbols = extractGeneric(lines, options)
+	}
+	result.References = referencesOf(lines, options)
+	return result
 }
 
 // line is one source line with its comment and string noise removed.
@@ -114,6 +331,9 @@ type line struct {
 	// are kept: cutting them would need to know which quotes are strings, and
 	// getting that wrong corrupts the declaration itself.
 	Code string
+	// Text is the original line, kept so a docstring can be read out of the
+	// comment a declaration is glued to.
+	Text string
 	// Indent is the count of leading spaces, with a tab counting as one.
 	Indent int
 }
@@ -163,7 +383,9 @@ func scan(language string, data []byte) []line {
 				inBlockComment = true
 			}
 		}
-		lines = append(lines, line{Number: index + 1, Code: code, Indent: indentOf(code)})
+		lines = append(lines, line{
+			Number: index + 1, Code: code, Text: text, Indent: indentOf(code),
+		})
 	}
 	return lines
 }

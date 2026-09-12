@@ -41,6 +41,7 @@ type Telemetry struct {
 // searching.
 type Context struct {
 	Index        Index        `json:"index" toml:"index"`
+	LSP          LSP          `json:"lsp" toml:"lsp"`
 	RepoMap      RepoMap      `json:"repo_map" toml:"repo_map"`
 	WorkingSet   WorkingSet   `json:"working_set" toml:"working_set"`
 	Evidence     Evidence     `json:"evidence" toml:"evidence"`
@@ -135,10 +136,39 @@ type CodingPolicy struct {
 // build on a large repository: a file over MaxFileBytes is recorded without
 // symbols, and a repository over MaxFiles is indexed only that far, which the
 // symbol tools report as a truncated index rather than as complete results.
+// LSP configures resident language-server sessions. ResidentEnabled is off
+// by default: a resident server is a host process, and the session must say
+// so explicitly before one is kept alive.
+type LSP struct {
+	ResidentEnabled bool          `json:"resident_enabled" toml:"resident_enabled"`
+	IdleTimeout     time.Duration `json:"idle_timeout" toml:"-"`
+	MaxServers      int           `json:"max_servers" toml:"max_servers"`
+	CacheCapacity   int           `json:"cache_capacity" toml:"cache_capacity"`
+}
+
 type Index struct {
 	Enabled      bool  `json:"enabled" toml:"enabled"`
 	MaxFileBytes int64 `json:"max_file_bytes" toml:"max_file_bytes"`
 	MaxFiles     int   `json:"max_files" toml:"max_files"`
+	// SignatureMaxBytes and DocstringMaxBytes bound the declaration text and
+	// comment block recorded per symbol; ReferenceMaxCount bounds how many
+	// distinct identifiers one file contributes. They keep the index from
+	// becoming a copy of pathological source files.
+	SignatureMaxBytes int64 `json:"signature_max_bytes" toml:"signature_max_bytes"`
+	DocstringMaxBytes int64 `json:"docstring_max_bytes" toml:"docstring_max_bytes"`
+	ReferenceMaxCount int   `json:"reference_max_count" toml:"reference_max_count"`
+	// Rank bounds the file PageRank behind the repository map's directory
+	// ranking. The damping default is the standard value from the original
+	// PageRank paper (Brin & Page, 1998); the iteration limit and convergence
+	// threshold bound the refinement loop.
+	RankDamping        float64 `json:"rank_damping_factor" toml:"rank_damping_factor"`
+	RankIterations     int     `json:"rank_iteration_limit" toml:"rank_iteration_limit"`
+	RankConvergence    float64 `json:"rank_convergence_threshold" toml:"rank_convergence_threshold"`
+	// Impact bounds the reverse dependency walk behind affected-test
+	// answers: how many hops a change reaches through and how many files one
+	// answer may name.
+	ImpactMaxDepth   int `json:"impact_max_depth" toml:"impact_max_depth"`
+	ImpactMaxResults int `json:"impact_max_results" toml:"impact_max_results"`
 }
 
 // Execution configures the main agent loop. MaxOutputTokens is an optional
@@ -350,6 +380,18 @@ type Overrides struct {
 	IndexEnabled         *bool
 	IndexMaxBytes        *int64
 	IndexMaxFiles        *int
+	IndexSignatureMax    *int64
+	IndexDocstringMax    *int64
+	IndexReferenceMax    *int
+	IndexRankDamping     *float64
+	IndexRankIterations  *int
+	IndexRankConvergence *float64
+	IndexImpactDepth     *int
+	IndexImpactResults   *int
+	LSPResidentEnabled   *bool
+	LSPIdleTimeout       *time.Duration
+	LSPMaxServers        *int
+	LSPCacheCapacity     *int
 
 	RepoMapEnabled                          *bool
 	RepoMapMaxBytes                         *int

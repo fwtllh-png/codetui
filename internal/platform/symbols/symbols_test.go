@@ -11,17 +11,19 @@ func TestLanguageResolvesByExtension(t *testing.T) {
 		"a/b/main.go": LanguageGo, "pkg/mod.PY": LanguagePython,
 		"web/app.tsx": LanguageTypeScript, "web/app.mjs": LanguageJavaScript,
 		"src/lib.rs": LanguageRust, "Main.java": LanguageJava,
+		"src/lib.cpp": LanguageCPP, "src/lib.c": LanguageC, "api.rb": "ruby",
 		"README.md": "", "Makefile": "", "archive.tar.gz": "",
 	} {
 		if got := Language(path); got != want {
 			t.Errorf("Language(%q) = %q, want %q", path, got, want)
 		}
 	}
-	if Supported("markdown") || !Supported(LanguageGo) {
-		t.Fatal("Supported disagrees with the extractor table")
+	// Every language is supported now: the question is only which tier answers.
+	if !Supported("markdown") || !Supported(LanguageGo) || !Supported("ruby") {
+		t.Fatal("Supported no longer answers for every language")
 	}
-	if symbols := Extract("markdown", []byte("# title\n")); symbols != nil {
-		t.Fatalf("unsupported language yielded %#v", symbols)
+	if found := Extract("markdown", []byte("# title\n")); found != nil {
+		t.Fatalf("markdown headings yielded %#v", found)
 	}
 }
 
@@ -288,6 +290,17 @@ func assertSymbols(t *testing.T, language, source string, want []Symbol) {
 		t.Fatalf("symbols =\n%s\nwant\n%s", format(got), format(want))
 	}
 	for index := range want {
+		// The rule tables own identity; signature and docstring are the
+		// decorate step's business and have their own tests. A rule table
+		// fixture asserts the identity fields never moved and the tier is
+		// what it should be.
+		if got[index].Resolution != ResolutionLexical {
+			t.Fatalf("symbol %d resolution = %q, want %q", index,
+				got[index].Resolution, ResolutionLexical)
+		}
+		got[index].Signature = ""
+		got[index].Docstring = ""
+		got[index].Resolution = ""
 		if got[index] != want[index] {
 			t.Fatalf("symbol %d = %+v, want %+v\nall =\n%s", index, got[index], want[index], format(got))
 		}

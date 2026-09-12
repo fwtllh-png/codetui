@@ -209,7 +209,10 @@ func TestEnsureIndexesUnsupportedAndRejectedFilesWithoutSymbols(t *testing.T) {
 	if len(files) != 2 {
 		t.Fatalf("files = %#v", files)
 	}
-	if files["README.md"].Language != "" || files["README.md"].SymbolCount != 0 {
+	// A file with no known language is recorded under the generic tier —
+	// every file has a language row now, just not always a rule table.
+	if files["README.md"].Language != symbols.LanguageGeneric ||
+		files["README.md"].SymbolCount != 0 {
 		t.Fatalf("markdown file = %+v", files["README.md"])
 	}
 	// A file the read policy rejected is still listed, with the reason in place of
@@ -284,6 +287,8 @@ func TestRelatedTestsFollowsNamingConventions(t *testing.T) {
 	if err != nil || !snapshot.Ready() {
 		t.Fatalf("snapshot = %+v, err = %v", snapshot, err)
 	}
+	// The fixture files reference no symbols across files, so the graph route
+	// contributes nothing here and every row arrives by convention.
 	for source, want := range map[string][]string{
 		// Go tests are package scoped, so every test file in the directory counts.
 		"api.go":                         {"api_test.go", "helper_test.go"},
@@ -292,8 +297,16 @@ func TestRelatedTestsFollowsNamingConventions(t *testing.T) {
 		"src/main/java/app/Service.java": {"src/test/java/app/ServiceTest.java"},
 		"api_test.go":                    {"api_test.go"},
 	} {
-		if got := related[source]; !equal(got, want) {
+		got := Paths(map[string][]RelatedTest{source: related[source]})[source]
+		if !equal(got, want) {
 			t.Errorf("related[%q] = %#v, want %#v", source, got, want)
+		}
+	}
+	for source, tests := range related {
+		for _, test := range tests {
+			if test.Resolution != TestFromConvention && test.Resolution != TestFromGraph {
+				t.Errorf("related[%q][%q] resolution = %q", source, test.Path, test.Resolution)
+			}
 		}
 	}
 	// A language with no convention this package knows is absent rather than
@@ -339,5 +352,86 @@ func writeFile(t *testing.T, root, name, content string) {
 	stamp := time.Now().Add(time.Duration(len(content)) * time.Millisecond)
 	if err := os.Chtimes(path, stamp, stamp); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestEnsureRecordsLayeredDetailForEveryLanguage(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "api.go", "package api\n\n// Serve answers.\nfunc Serve(path string) error {\n\treturn nil\n}\n")
+	writeFile(t, root, "engine.cpp", "namespace engine {\n\n// Run starts the engine.\nint Run(int argc) {\n\treturn 0;\n}\n\n}\n")
+	writeFile(t, root, "tool.kt", "class Tool {\n    fun apply(x: Int) {}\n}\n")
+	index, _ := newIndex(t, root, Options{})
+
+	if _, err := index.Ensure(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	found, snapshot, err := index.Symbols(t.Context(), Query{Name: "", Paths: []string{"api.go"}})
+	if err != nil || !snapshot.Ready() {
+		t.Fatalf("symbols: %v %+v", err, snapshot)
+	}
+	if len(found) != 1 || found[0].Name != "Serve" {
+		t.Fatalf("go symbols = %#v", found)
+	}
+	if found[0].Signature != "func Serve(path string) error" {
+		t.Fatalf("signature = %q", found[0].Signature)
+	}
+	if found[0].Docstring != "Serve answers." {
+		t.Fatalf("docstring = %q", found[0].Docstring)
+	}
+	if found[0].Resolution != symbols.ResolutionLexical {
+		t.Fatalf("resolution = %q", found[0].Resolution)
+	}
+
+	found, _, err = index.Symbols(t.Context(), Query{Name: "", Paths: []string{"engine.cpp"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(found) != 1 || found[0].Name != "Run" || found[0].Container != "engine" {
+		t.Fatalf("cpp symbols = %#v", found)
+	}
+	if found[0].Docstring != "Run starts the engine." {
+		t.Fatalf("cpp docstring = %q", found[0].Docstring)
+	}
+
+	// A language without a rule table still yields rows, marked heuristic.
+	found, _, err = index.Symbols(t.Context(), Query{Name: "", Paths: []string{"tool.kt"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(found) != 2 || found[0].Name != "Tool" || found[1].Name != "apply" ||
+		found[1].Resolution != symbols.ResolutionHeuristic {
+		t.Fatalf("kotlin symbols = %#v", found)
+	}
+}
+
+func TestStoreRoundTripsReferences(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "api.go", "package api\n\nfunc Serve() error {\n\treturn Helper(1)\n}\n")
+	index, store := newIndex(t, root, Options{})
+	if _, err := index.Ensure(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := store.db.Query(
+		"SELECT name, use_count FROM repo_index_references WHERE root_path = ? AND path = ?",
+		store.root, "api.go",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	counts := map[string]int{}
+	for rows.Next() {
+		var name string
+		var uses int
+		if err := rows.Scan(&name, &uses); err != nil {
+			t.Fatal(err)
+		}
+		counts[name] = uses
+	}
+	if counts["Serve"] == 0 || counts["Helper"] == 0 {
+		t.Fatalf("references = %#v", counts)
+	}
+	if _, counted := counts["return"]; counted {
+		t.Fatalf("stop word counted: %#v", counts)
 	}
 }

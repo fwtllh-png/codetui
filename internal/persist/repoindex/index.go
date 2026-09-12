@@ -3,6 +3,7 @@ package repoindex
 import (
 	"context"
 	"errors"
+	"path"
 	"runtime"
 	"sort"
 	"sync"
@@ -15,7 +16,15 @@ import (
 // IndexerVersion identifies the extraction rules that produced the stored rows.
 // Raise it whenever a change to the symbol rules would make old rows disagree
 // with new ones: the next refresh then rebuilds instead of trusting them.
-const IndexerVersion = 1
+//
+// Version 2 added the layered extractor: signature, docstring and per-row
+// resolution, file-level reference counts, C and C++ rule tables, and the
+// generic engine that gives every other language heuristic rows.
+//
+// Version 3 added the reference graph: recorded import specifiers, resolved
+// import and reference edges, file ranks, and entry-point classification on
+// the file rows.
+const IndexerVersion = 3
 
 // Index states a consumer can see.
 const (
@@ -49,6 +58,19 @@ type Options struct {
 	Concurrency int
 	// BatchSize is how many files one write transaction carries.
 	BatchSize int
+	// SignatureMaxBytes, DocstringMaxBytes and ReferenceMaxCount carry the
+	// extractor's detail bounds through from configuration; zero selects the
+	// extractor defaults.
+	SignatureMaxBytes  int64
+	DocstringMaxBytes  int64
+	ReferenceMaxCount  int
+	// Rank carries the graph bounds: damping, iteration limit and convergence
+	// threshold for the file PageRank. Zero selects the defaults; the damping
+	// default is the standard value from Brin & Page (1998).
+	Rank RankOptions
+	// Impact bounds the reverse dependency walk behind affected-test answers.
+	// Zero selects the defaults.
+	Impact ImpactOptions
 	// Now replaces the clock in tests.
 	Now func() time.Time
 }
@@ -247,6 +269,11 @@ func (i *Index) refresh(ctx context.Context) (Snapshot, error) {
 	if err != nil {
 		return Snapshot{}, err
 	}
+	// The graph follows the file set: ranks a map would show must describe
+	// the files the refresh just confirmed. A graph failure degrades the
+	// ranks alone — the map falls back to declaration counts — and never
+	// fails the refresh.
+	i.rebuildGraph(ctx, files)
 	total := 0
 	for _, file := range files {
 		total += file.SymbolCount
@@ -344,11 +371,15 @@ func (i *Index) reindex(ctx context.Context, stale []repowalk.Entry) error {
 // scan reads one file and extracts its declarations. A file the read policy
 // rejects still enters the index with no symbols, so the next refresh does not
 // read it again and consumers can still see that it exists.
+//
+// A file whose language is not identified is recorded as the generic tier and
+// gets heuristic rows rather than none.
 func (i *Index) scan(entry repowalk.Entry) (Record, bool) {
 	language := symbols.Language(entry.Path)
 	file := File{
 		Path: entry.Path, Language: language, Size: entry.Size,
 		Modified: entry.Modified, IndexedAt: i.options.Now(),
+		EntryPoint: EntryPoint(entry.Path),
 	}
 	content, reason, err := i.walker.Read(entry, i.options.MaxFileBytes)
 	if err != nil || reason == repowalk.SkipMissing {
@@ -360,14 +391,38 @@ func (i *Index) scan(entry repowalk.Entry) (Record, bool) {
 		return Record{File: file}, true
 	}
 	file.Digest = content.Digest
-	extracted := symbols.Extract(language, content.Data)
-	record := Record{File: file, Symbols: make([]Symbol, 0, len(extracted))}
-	for _, found := range extracted {
+	if language == "" {
+		// The extension said nothing; a shebang may still name the language,
+		// and failing that the generic tier gives the file heuristic rows.
+		language = symbols.DetectLanguage(entry.Path, content.Data)
+		if language == "" {
+			language = symbols.LanguageGeneric
+		}
+		file.Language = language
+	}
+	extracted := symbols.ExtractResult(language, content.Data, symbols.Options{
+		SignatureMaxBytes:  int(i.options.SignatureMaxBytes),
+		DocstringMaxBytes:  int(i.options.DocstringMaxBytes),
+		ReferenceMaxCount:  i.options.ReferenceMaxCount,
+	})
+	record := Record{File: file, Symbols: make([]Symbol, 0, len(extracted.Symbols))}
+	for _, found := range extracted.Symbols {
 		record.Symbols = append(record.Symbols, Symbol{
 			Path: entry.Path, Name: found.Name, Kind: found.Kind,
 			Container: found.Container, Line: found.Line, Exported: found.Exported,
+			Signature: found.Signature, Docstring: found.Docstring,
+			Resolution: found.Resolution,
 		})
 	}
+	record.References = make([]Reference, 0, len(extracted.References))
+	for _, counted := range extracted.References {
+		record.References = append(record.References, Reference{
+			Name: counted.Name, Count: counted.Count,
+		})
+	}
+	// Import specifiers are recorded raw; the graph build resolves them once
+	// the whole file set is confirmed.
+	record.Imports = parseImports(language, content.Data)
 	return record, true
 }
 
@@ -400,10 +455,31 @@ func (i *Index) prune(ctx context.Context, entries []repowalk.Entry, existing ma
 	return nil
 }
 
-// Resolution labels every symbol result. The index reads lines, not syntax
-// trees, and consumers are expected to pass this on rather than imply more
-// precision than there is.
-const Resolution = "lexical"
+// Resolution labels the extraction tier of a symbol row. The index reads
+// lines, not syntax trees: a heuristic row came from the generic engine, a
+// lexical row from a per-language rule table, and consumers are expected to
+// pass the tier on rather than imply more precision than there is.
+const (
+	ResolutionHeuristic = symbols.ResolutionHeuristic
+	ResolutionLexical   = symbols.ResolutionLexical
+)
+
+// WeakestResolution names the least trusted tier a result set carries, so a
+// reply can state one resolution without hiding that some rows guess.
+func WeakestResolution(found []Symbol) string {
+	weakest := ""
+	for _, symbol := range found {
+		switch symbol.Resolution {
+		case ResolutionHeuristic:
+			return ResolutionHeuristic
+		case ResolutionLexical:
+			if weakest == "" {
+				weakest = ResolutionLexical
+			}
+		}
+	}
+	return weakest
+}
 
 // cancelled reports the state to show when a build was interrupted.
 func (i *Index) cancelled() Snapshot {
@@ -414,4 +490,22 @@ func (i *Index) cancelled() Snapshot {
 		Status: StatusDegraded,
 		Detail: "the repository index build was cancelled before it completed",
 	}
+}
+
+// entryPointNames are the file names that usually start a program. The
+// classification lives with the index — like the build-manifest list — so the
+// map, the graph seeds and any other consumer answer it the same way.
+var entryPointNames = map[string]struct{}{
+	"main.go": {}, "main.py": {}, "__main__.py": {}, "main.rs": {},
+	"main.ts": {}, "main.js": {}, "index.ts": {}, "index.js": {},
+	"lib.rs": {}, "Main.java": {}, "main.c": {}, "main.cpp": {},
+}
+
+// EntryPoint reports whether a path is a recognized program entry point. Entry
+// points seed the graph's personalized PageRank: a walk that restarts from
+// them ranks what a program actually reaches over what merely sits in the
+// repository.
+func EntryPoint(candidate string) bool {
+	_, found := entryPointNames[path.Base(candidate)]
+	return found
 }

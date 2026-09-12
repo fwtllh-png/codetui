@@ -51,7 +51,7 @@ func TestSearchSymbolFindsDeclarationsBySubstring(t *testing.T) {
 		matches[0]["kind"] != "type" || matches[0]["line"].(float64) != 3 {
 		t.Fatalf("first match = %#v", matches[0])
 	}
-	if result.Metadata["resolution"] != repoindex.Resolution {
+	if result.Metadata["resolution"] != repoindex.ResolutionLexical {
 		t.Fatalf("resolution = %#v", result.Metadata["resolution"])
 	}
 
@@ -147,7 +147,7 @@ func TestSymbolSearchFallsBackToLexicalWithReason(t *testing.T) {
 	result := execute(t, registry, "search_definition", map[string]any{
 		"name": "Serve", "path": "api.go", "line": 3, "character": 6,
 	})
-	if result.Metadata["resolution"] != repoindex.Resolution ||
+	if result.Metadata["resolution"] != repoindex.ResolutionLexical ||
 		result.Metadata["source"] != "repoindex" ||
 		result.Metadata["version"] != repoindex.IndexerVersion ||
 		result.Metadata["confidence"] != "low" ||
@@ -202,10 +202,14 @@ func TestSearchRelatedTestsReportsWhatItCannotMap(t *testing.T) {
 	})
 	var payload struct {
 		Coverage []struct {
-			Source string   `json:"source"`
-			Tests  []string `json:"tests"`
+			Source string `json:"source"`
+			Tests  []struct {
+				Path       string `json:"path"`
+				Resolution string `json:"resolution"`
+			} `json:"tests"`
 		} `json:"coverage"`
-		Unmapped []string `json:"unmapped"`
+		Unmapped     []string `json:"unmapped"`
+		ImpactSource string   `json:"impact_source"`
 	}
 	if err := json.Unmarshal([]byte(result.Content), &payload); err != nil {
 		t.Fatal(err)
@@ -214,8 +218,13 @@ func TestSearchRelatedTestsReportsWhatItCannotMap(t *testing.T) {
 		t.Fatalf("coverage = %#v", payload.Coverage)
 	}
 	if payload.Coverage[0].Source != "api.go" ||
-		len(payload.Coverage[0].Tests) != 1 || payload.Coverage[0].Tests[0] != "api_test.go" {
+		len(payload.Coverage[0].Tests) != 1 ||
+		payload.Coverage[0].Tests[0].Path != "api_test.go" ||
+		payload.Coverage[0].Tests[0].Resolution != repoindex.TestFromConvention {
 		t.Fatalf("go coverage = %#v", payload.Coverage[0])
+	}
+	if payload.ImpactSource != "convention" {
+		t.Fatalf("impact_source = %q, want convention", payload.ImpactSource)
 	}
 	// Python has a convention but no test file here, which is different from Rust
 	// and Markdown having no convention this index knows.

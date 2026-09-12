@@ -9,48 +9,18 @@ import (
 	"github.com/fwtllh-png/QCode/internal/platform/symbols"
 )
 
-// RelatedTests maps each source path to the test files that cover it, keeping
-// only candidates the index actually holds. The mapping is by naming convention,
-// which is what a lexical index can honestly claim: it finds the test file a
-// project names after the source, not every test that exercises the code.
-//
-// Paths that are themselves tests map to themselves. Languages with no
-// convention this package knows are absent from the result, so a caller can tell
-// "no tests" from "cannot tell".
-func (i *Index) RelatedTests(ctx context.Context, paths []string) (map[string][]string, Snapshot, error) {
-	files, snapshot, err := i.Files(ctx)
-	if err != nil || !snapshot.Ready() {
-		return nil, snapshot, err
-	}
-	indexed := make(map[string]struct{}, len(files))
-	directories := make(map[string][]string)
-	for path := range files {
-		indexed[path] = struct{}{}
-		directory, name := splitPath(path)
-		directories[directory] = append(directories[directory], name)
-	}
-	related := make(map[string][]string, len(paths))
-	for _, path := range paths {
-		matches := relatedTests(path, indexed, directories)
-		if matches == nil {
-			continue
-		}
-		related[path] = matches
-	}
-	return related, snapshot, nil
-}
-
-// TestMapper adapts the index for a caller that wants the mapping alone. An
-// index that cannot answer becomes an error, which is what the verify gate's
-// affected scope needs to report itself unavailable instead of passing on no
-// evidence. A nil index reports itself the same way.
+// TestMapper adapts the index for a caller that wants the mapping alone, with
+// the route each answer came by. An index that cannot answer becomes an error,
+// which is what a verify gate's affected scope needs to report itself
+// unavailable instead of passing on no evidence. A nil index reports itself
+// the same way.
 type TestMapper struct {
 	Index *Index
 }
 
 func (m TestMapper) RelatedTests(
 	ctx context.Context, paths []string,
-) (map[string][]string, error) {
+) (map[string][]RelatedTest, error) {
 	related, snapshot, err := m.Index.RelatedTests(ctx, paths)
 	if err != nil {
 		return nil, err
@@ -63,6 +33,20 @@ func (m TestMapper) RelatedTests(
 		return nil, errors.New(message)
 	}
 	return related, nil
+}
+
+// Paths projects the mapping to bare test paths, for callers that only need
+// where to look.
+func Paths(mapping map[string][]RelatedTest) map[string][]string {
+	projection := make(map[string][]string, len(mapping))
+	for source, tests := range mapping {
+		paths := make([]string, 0, len(tests))
+		for _, test := range tests {
+			paths = append(paths, test.Path)
+		}
+		projection[source] = paths
+	}
+	return projection
 }
 
 // IsTestPath reports whether a path is a test file by the conventions of its

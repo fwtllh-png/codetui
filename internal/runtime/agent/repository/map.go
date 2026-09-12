@@ -126,12 +126,22 @@ func Build(ctx context.Context, index Index, focus []string, options Options) Ma
 	result := Map{Status: repoindex.StatusReady, FileCount: len(files)}
 	grouped := make(map[string]*Directory, len(files))
 	languages := make(map[string]map[string]int, len(files))
-	for _, file := range files {
+	// Path order keeps the float sums below deterministic: the same
+	// repository must aggregate to the same scores, or the ranking is not a
+	// ranking but a coin flip between builds.
+	ordered := make([]string, 0, len(files))
+	for candidate := range files {
+		ordered = append(ordered, candidate)
+	}
+	sort.Strings(ordered)
+	scores := make(map[string]float64, len(grouped))
+	for _, candidate := range ordered {
+		file := files[candidate]
 		result.SymbolCount += file.SymbolCount
 		if manifest, found := buildManifest(file.Path); found {
 			result.Build = append(result.Build, manifest)
 		}
-		if entryPoint(file.Path) {
+		if file.EntryPoint {
 			result.Entries = append(result.Entries, file.Path)
 		}
 		key := group(file.Path, options.Depth)
@@ -143,6 +153,7 @@ func Build(ctx context.Context, index Index, focus []string, options Options) Ma
 		}
 		directory.Files++
 		directory.Symbols += file.SymbolCount
+		scores[key] += file.Rank
 		if file.Language != "" {
 			languages[key][file.Language]++
 		}
@@ -159,10 +170,17 @@ func Build(ctx context.Context, index Index, focus []string, options Options) Ma
 		directory.Languages = topLanguages(languages[key])
 		directories = append(directories, *directory)
 	}
-	// Declaration count decides what survives the limit: a directory with more
-	// declarations is more likely to be where the work happens.
+	// The graph decides what survives the limit: a directory whose files a
+	// walk from the entry points reaches carries more rank than one that
+	// merely holds many declarations. Rank is zero before a graph build has
+	// run, and the comparison below then falls through to declaration count —
+	// the previous behaviour, kept as the fallback rather than as a second
+	// ranking to configure.
 	sort.Slice(directories, func(i, j int) bool {
 		left, right := directories[i], directories[j]
+		if scores[left.Path] != scores[right.Path] {
+			return scores[left.Path] > scores[right.Path]
+		}
 		if left.Symbols != right.Symbols {
 			return left.Symbols > right.Symbols
 		}
@@ -265,18 +283,6 @@ func buildManifest(candidate string) (string, bool) {
 		return candidate, true
 	}
 	return "", false
-}
-
-// entryNames are the file names that usually start a program.
-var entryNames = map[string]struct{}{
-	"main.go": {}, "main.py": {}, "__main__.py": {}, "main.rs": {},
-	"main.ts": {}, "main.js": {}, "index.ts": {}, "index.js": {},
-	"lib.rs": {}, "Main.java": {},
-}
-
-func entryPoint(candidate string) bool {
-	_, found := entryNames[path.Base(candidate)]
-	return found
 }
 
 // topLanguages returns at most two languages, most files first.

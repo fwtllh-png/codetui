@@ -71,6 +71,46 @@ func (s Snapshot) Validate() error {
 		if err := checkRange(fieldIndexMaxFiles, index.MaxFiles, 1_000_000); err != nil {
 			return err
 		}
+		if index.SignatureMaxBytes < 64 || index.SignatureMaxBytes > 65536 {
+			return fieldError(fieldIndexSignatureMax, s.Provenance,
+				"must be between 64 and 65536")
+		}
+		if index.DocstringMaxBytes < 256 || index.DocstringMaxBytes > 1<<20 {
+			return fieldError(fieldIndexDocstringMax, s.Provenance,
+				"must be between 256 and 1048576")
+		}
+		if err := checkRange(fieldIndexReferenceMax, index.ReferenceMaxCount, 65536); err != nil {
+			return err
+		}
+		if index.RankDamping <= 0 || index.RankDamping >= 1 {
+			return fieldError(fieldIndexRankDamping, s.Provenance,
+				"must be between 0 and 1 (exclusive)")
+		}
+		if err := checkRange(fieldIndexRankIterations, index.RankIterations, 10000); err != nil {
+			return err
+		}
+		if index.RankConvergence <= 0 || index.RankConvergence >= 1 {
+			return fieldError(fieldIndexRankConvergence, s.Provenance,
+				"must be between 0 and 1 (exclusive)")
+		}
+		if err := checkRange(fieldIndexImpactDepth, index.ImpactMaxDepth, 16); err != nil {
+			return err
+		}
+		if err := checkRange(fieldIndexImpactResults, index.ImpactMaxResults, 10000); err != nil {
+			return err
+		}
+	}
+	if lspConfig := s.Config.Context.LSP; lspConfig.ResidentEnabled {
+		if lspConfig.IdleTimeout < time.Second || lspConfig.IdleTimeout > time.Hour {
+			return fieldError(fieldLSPIdleTimeout, s.Provenance,
+				"must be between 1s and 1h")
+		}
+		if err := checkRange(fieldLSPMaxServers, lspConfig.MaxServers, 8); err != nil {
+			return err
+		}
+		if err := checkRange(fieldLSPCacheCapacity, lspConfig.CacheCapacity, 4096); err != nil {
+			return err
+		}
 	}
 	if repoMap := s.Config.Context.RepoMap; repoMap.Enabled {
 

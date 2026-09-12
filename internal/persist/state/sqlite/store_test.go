@@ -407,3 +407,67 @@ func TestSchemaMigrationChainIsContiguous(t *testing.T) {
 		t.Fatalf("migration chain ends at %d, want SchemaVersion %d", last.to, SchemaVersion)
 	}
 }
+
+func TestOpenRebuildsRepositoryIndexShapeOutsideTheMigrationChain(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.db")
+	raw, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A database from before the layered extractor: index tables without the
+	// detail columns and without the reference table. The user_version is
+	// current, which is exactly why the rebuild must not go through the
+	// migration chain.
+	if _, err := raw.ExecContext(t.Context(), schemaCurrent); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.ExecContext(t.Context(), "PRAGMA user_version = 4"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.ExecContext(t.Context(), `
+DROP TABLE repo_index_symbols;
+CREATE TABLE repo_index_symbols (
+    root_path TEXT NOT NULL,
+    path TEXT NOT NULL,
+    name TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    container TEXT NOT NULL DEFAULT '',
+    line INTEGER NOT NULL,
+    exported INTEGER NOT NULL DEFAULT 0,
+    FOREIGN KEY (root_path, path)
+        REFERENCES repo_index_files(root_path, path) ON DELETE CASCADE
+);
+INSERT INTO repo_index_files(
+    root_path, path, language, size_bytes, modified_unix_nano,
+    digest, symbol_count, indexed_at
+) VALUES ('/old', 'a.go', 'go', 1, 1, 'stale', 1, '2020-01-01T00:00:00Z');
+INSERT INTO repo_index_symbols(root_path, path, name, kind, line)
+    VALUES ('/old', 'a.go', 'Old', 'function', 1);
+`); err != nil {
+		t.Fatal(err)
+	}
+	if err := raw.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	opened, err := Open(t.Context(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = opened.Close() })
+	// The version is untouched: cache shape is not schema migration.
+	assertPragma(t, opened.DB(), "user_version", "4")
+	assertTableColumns(t, opened.DB(), "repo_index_symbols", "signature")
+	assertTableColumns(t, opened.DB(), "repo_index_symbols", "resolution")
+	assertTableColumns(t, opened.DB(), "repo_index_references", "use_count")
+	var rows int
+	if err := opened.DB().QueryRowContext(
+		t.Context(),
+		"SELECT COUNT(*) FROM repo_index_symbols",
+	).Scan(&rows); err != nil {
+		t.Fatal(err)
+	}
+	if rows != 0 {
+		t.Fatalf("stale cache rows survived the rebuild: %d", rows)
+	}
+}

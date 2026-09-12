@@ -23,6 +23,18 @@ const (
 	fieldIndexEnabled         = "context.index.enabled"
 	fieldIndexMaxBytes        = "context.index.max_file_bytes"
 	fieldIndexMaxFiles        = "context.index.max_files"
+	fieldIndexSignatureMax    = "context.index.signature_max_bytes"
+	fieldIndexDocstringMax    = "context.index.docstring_max_bytes"
+	fieldIndexReferenceMax    = "context.index.reference_max_count"
+	fieldIndexRankDamping     = "context.index.rank_damping_factor"
+	fieldIndexRankIterations  = "context.index.rank_iteration_limit"
+	fieldIndexRankConvergence = "context.index.rank_convergence_threshold"
+	fieldIndexImpactDepth     = "context.index.impact_max_depth"
+	fieldIndexImpactResults   = "context.index.impact_max_results"
+	fieldLSPResidentEnabled   = "context.lsp.resident_enabled"
+	fieldLSPIdleTimeout       = "context.lsp.idle_timeout"
+	fieldLSPMaxServers        = "context.lsp.max_servers"
+	fieldLSPCacheCapacity     = "context.lsp.cache_capacity"
 
 	fieldRepoMapEnabled        = "context.repo_map.enabled"
 	fieldRepoMapMaxBytes       = "context.repo_map.max_bytes"
@@ -162,6 +174,18 @@ func defaultProvenance() map[string]Source {
 		fieldIndexEnabled:         SourceDefault,
 		fieldIndexMaxBytes:        SourceDefault,
 		fieldIndexMaxFiles:        SourceDefault,
+		fieldIndexSignatureMax:    SourceDefault,
+		fieldIndexDocstringMax:    SourceDefault,
+		fieldIndexReferenceMax:    SourceDefault,
+		fieldIndexRankDamping:     SourceDefault,
+		fieldIndexRankIterations:  SourceDefault,
+		fieldIndexRankConvergence: SourceDefault,
+		fieldIndexImpactDepth:     SourceDefault,
+		fieldIndexImpactResults:   SourceDefault,
+		fieldLSPResidentEnabled:   SourceDefault,
+		fieldLSPIdleTimeout:       SourceDefault,
+		fieldLSPMaxServers:        SourceDefault,
+		fieldLSPCacheCapacity:     SourceDefault,
 
 		fieldRepoMapEnabled:                          SourceDefault,
 		fieldRepoMapMaxBytes:                         SourceDefault,

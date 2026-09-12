@@ -204,6 +204,9 @@ func Open(ctx context.Context, path string, options ...Options) (*Store, error) 
 			}
 		}
 	}
+	if err := store.ensureRepositoryIndexShape(ctx); err != nil {
+		return nil, err
+	}
 	if err := store.verifyPragmas(ctx, opts.BusyTimeout); err != nil {
 		return nil, err
 	}
@@ -595,6 +598,12 @@ CREATE TABLE IF NOT EXISTS usage_turn_context (
 // workspaces(id) reference: sessions that run without a persistent store keep
 // their index in an ephemeral database that has no workspace rows at all, and
 // one database may hold several roots.
+//
+// These tables are a rebuildable cache, not authoritative state: their shape
+// evolves outside the user_version migration chain. Opening a database whose
+// index tables carry an older shape drops and recreates them; the next refresh
+// rebuilds under the current IndexerVersion, which is the same trust boundary
+// that already governs a rules change.
 const repositoryIndexSchema = `
 CREATE TABLE repo_index_files (
     root_path TEXT NOT NULL,
@@ -605,6 +614,7 @@ CREATE TABLE repo_index_files (
     digest TEXT NOT NULL,
     symbol_count INTEGER NOT NULL DEFAULT 0,
     indexed_at TEXT NOT NULL,
+    entry_point INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (root_path, path)
 );
 
@@ -616,11 +626,54 @@ CREATE TABLE repo_index_symbols (
     container TEXT NOT NULL DEFAULT '',
     line INTEGER NOT NULL,
     exported INTEGER NOT NULL DEFAULT 0,
+    signature TEXT NOT NULL DEFAULT '',
+    docstring TEXT NOT NULL DEFAULT '',
+    resolution TEXT NOT NULL DEFAULT '',
     FOREIGN KEY (root_path, path)
         REFERENCES repo_index_files(root_path, path) ON DELETE CASCADE
 );
 CREATE INDEX repo_index_symbols_name ON repo_index_symbols(root_path, name);
 CREATE INDEX repo_index_symbols_path ON repo_index_symbols(root_path, path);
+
+CREATE TABLE repo_index_references (
+    root_path TEXT NOT NULL,
+    path TEXT NOT NULL,
+    name TEXT NOT NULL,
+    use_count INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (root_path, path, name),
+    FOREIGN KEY (root_path, path)
+        REFERENCES repo_index_files(root_path, path) ON DELETE CASCADE
+);
+CREATE INDEX repo_index_references_name ON repo_index_references(root_path, name);
+
+CREATE TABLE repo_index_imports (
+    root_path TEXT NOT NULL,
+    path TEXT NOT NULL,
+    position INTEGER NOT NULL,
+    spec TEXT NOT NULL,
+    PRIMARY KEY (root_path, path, position),
+    FOREIGN KEY (root_path, path)
+        REFERENCES repo_index_files(root_path, path) ON DELETE CASCADE
+);
+
+CREATE TABLE repo_index_edges (
+    root_path TEXT NOT NULL,
+    src_path TEXT NOT NULL,
+    dst_path TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    weight REAL NOT NULL DEFAULT 1,
+    PRIMARY KEY (root_path, src_path, dst_path, kind)
+);
+CREATE INDEX repo_index_edges_dst ON repo_index_edges(root_path, dst_path);
+
+CREATE TABLE repo_index_file_rank (
+    root_path TEXT NOT NULL,
+    path TEXT NOT NULL,
+    rank REAL NOT NULL,
+    PRIMARY KEY (root_path, path),
+    FOREIGN KEY (root_path, path)
+        REFERENCES repo_index_files(root_path, path) ON DELETE CASCADE
+);
 
 CREATE TABLE repo_index_meta (
     root_path TEXT PRIMARY KEY,
@@ -632,6 +685,100 @@ CREATE TABLE repo_index_meta (
     refreshed_at TEXT NOT NULL
 );
 `
+
+// repositoryIndexColumns are the columns the index tables must carry for the
+// schema above. An older database that lacks any of them is dropped into the
+// current shape rather than migrated column by column: the rows are a cache
+// the next refresh replaces wholesale.
+var repositoryIndexColumns = map[string][]string{
+	"repo_index_files": {
+		"root_path", "path", "language", "size_bytes", "modified_unix_nano",
+		"digest", "symbol_count", "indexed_at", "entry_point",
+	},
+	"repo_index_symbols": {
+		"root_path", "path", "name", "kind", "container", "line", "exported",
+		"signature", "docstring", "resolution",
+	},
+	"repo_index_references": {
+		"root_path", "path", "name", "use_count",
+	},
+	"repo_index_imports": {
+		"root_path", "path", "position", "spec",
+	},
+	"repo_index_edges": {
+		"root_path", "src_path", "dst_path", "kind", "weight",
+	},
+	"repo_index_file_rank": {
+		"root_path", "path", "rank",
+	},
+}
+
+// ensureRepositoryIndexShape drops and recreates the repository index tables
+// when their columns no longer match the schema this build expects. The
+// user_version chain stays untouched: a versioned migration would lend the
+// cache rows an authority they are explicitly designed not to have.
+func (s *Store) ensureRepositoryIndexShape(ctx context.Context) error {
+	rebuild := false
+	for table, expected := range repositoryIndexColumns {
+		rows, err := s.db.QueryContext(ctx, "PRAGMA table_info("+table+")")
+		if err != nil {
+			return s.classify("inspect repository index shape", err)
+		}
+		present := map[string]struct{}{}
+		for rows.Next() {
+			var order int
+			var name, columnType string
+			var notNull, primaryKey int
+			var defaultValue sql.NullString
+			if err := rows.Scan(
+				&order, &name, &columnType, &notNull, &defaultValue, &primaryKey,
+			); err != nil {
+				rows.Close()
+				return s.classify("inspect repository index shape", err)
+			}
+			present[name] = struct{}{}
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return s.classify("inspect repository index shape", err)
+		}
+		rows.Close()
+		if len(present) == 0 {
+			// A fresh database creates every table from schemaCurrent; an
+			// existing one always has the symbols table, so an absent table
+			// only means the schema statement below creates it.
+			continue
+		}
+		for _, column := range expected {
+			if _, found := present[column]; !found {
+				rebuild = true
+				break
+			}
+		}
+	}
+	if !rebuild {
+		return nil
+	}
+	return s.WithTx(ctx, nil, func(tx *sql.Tx) error {
+		for _, statement := range []string{
+			`DROP TABLE IF EXISTS repo_index_symbols`,
+			`DROP TABLE IF EXISTS repo_index_references`,
+			`DROP TABLE IF EXISTS repo_index_imports`,
+			`DROP TABLE IF EXISTS repo_index_edges`,
+			`DROP TABLE IF EXISTS repo_index_file_rank`,
+			`DROP TABLE IF EXISTS repo_index_files`,
+			`DROP TABLE IF EXISTS repo_index_meta`,
+		} {
+			if _, err := tx.ExecContext(ctx, statement); err != nil {
+				return s.classify("rebuild repository index shape", err)
+			}
+		}
+		if _, err := tx.ExecContext(ctx, repositoryIndexSchema); err != nil {
+			return s.classify("rebuild repository index shape", err)
+		}
+		return nil
+	})
+}
 
 // A local trace has one row per span, keyed by the turn it belongs to.
 //

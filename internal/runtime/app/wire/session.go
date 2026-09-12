@@ -23,6 +23,19 @@ type sessionConfiguration struct {
 	profile  protocol.SessionProfile
 }
 
+// RegisterResource adds a construction-time resource to the session's close
+// stack. Modules that build long-lived host processes — a resident
+// language-server pool, for one — register them here so session teardown
+// retires them with everything else, in reverse order.
+func (s *Session) RegisterResource(
+	name string, close func(context.Context) error,
+) error {
+	if s.resources == nil {
+		return errors.New("session resources are not initialized")
+	}
+	return s.resources.Add(name, close)
+}
+
 func (s *Session) Close(ctx context.Context) error {
 	s.closeOnce.Do(func() {
 		if s.resources != nil {

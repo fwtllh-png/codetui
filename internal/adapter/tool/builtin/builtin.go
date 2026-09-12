@@ -5,6 +5,7 @@ import (
 	"time"
 
 	language "github.com/fwtllh-png/QCode/internal/adapter/lsp"
+	"github.com/fwtllh-png/QCode/internal/platform/symbols"
 	"github.com/fwtllh-png/QCode/internal/adapter/tool"
 	completiontool "github.com/fwtllh-png/QCode/internal/adapter/tool/completion"
 	contenttool "github.com/fwtllh-png/QCode/internal/adapter/tool/content"
@@ -48,8 +49,7 @@ func NewWithIndex(
 	webOpts ...webtool.Options,
 ) (*tool.Registry, *handletool.Store, error) {
 	return NewWithIndexAndRuntime(
-		root, backend, store, manager, index,
-		nil, webOpts...,
+		root, backend, store, manager, index, nil, nil, webOpts...,
 	)
 }
 
@@ -59,6 +59,7 @@ func NewWithIndexAndRuntime(
 	store contentstore.Store,
 	manager *process.SessionManager,
 	index *repoindex.Index,
+	semantic symbols.Provider,
 	workspaceRuntime *workspacebroker.Runtime,
 	webOpts ...webtool.Options,
 ) (*tool.Registry, *handletool.Store, error) {
@@ -136,9 +137,14 @@ func NewWithIndexAndRuntime(
 	if err := webtool.RegisterWithOptions(registry, options); err != nil {
 		return nil, nil, err
 	}
+	semanticProvider := semantic
+	if semanticProvider == nil {
+		// Without a resident pool the session keeps the one-shot checker it
+		// always had: one server per query, no state between them.
+		semanticProvider = language.Checker{Root: root, Sandbox: backend}
+	}
 	if err := searchtool.RegisterWithProviders(
-		registry, root, backend, index,
-		language.Checker{Root: root, Sandbox: backend},
+		registry, root, backend, index, semanticProvider,
 	); err != nil {
 		return nil, nil, err
 	}
@@ -178,6 +184,7 @@ func NewWithAuthority(
 	store contentstore.Store,
 	manager *process.SessionManager,
 	index *repoindex.Index,
+	semantic symbols.Provider,
 	leaseAuthority *authority.LeaseAuthority,
 	leaseTTL time.Duration,
 	webOpts ...webtool.Options,
@@ -189,6 +196,6 @@ func NewWithAuthority(
 		return nil, nil, err
 	}
 	return NewWithIndexAndRuntime(
-		root, backend, store, manager, index, runtime, webOpts...,
+		root, backend, store, manager, index, semantic, runtime, webOpts...,
 	)
 }

@@ -111,6 +111,32 @@ workspace = "auto"           # auto | read_only | worktree | same_workspace_seri
 enabled = true
 max_file_bytes = 1048576
 max_files = 20000
+# 以下三项约束每个符号记录的细节量级，防止病态文件把索引变成源码副本。
+# 默认值分别容纳一条长参数列表、一个完整注释块和一个大型生成文件的
+# 去重标识符集合；调整后 IndexerVersion 语义不变，下次刷新按新界重写。
+signature_max_bytes = 512
+docstring_max_bytes = 2048
+reference_max_count = 4096
+# 引用图排名（Repo Map 目录排序的数据源）参数。damping 取 PageRank
+# 原论文（Brin & Page, 1998）的标准值 0.85；迭代上限与收敛阈值限定
+# 精化循环规模。排名失败时 Repo Map 自动回退按声明数排序。
+rank_damping_factor = 0.85
+rank_iteration_limit = 100
+rank_convergence_threshold = 0.000001
+[context.lsp]
+# 常驻 language server 会话池。常驻 server 是宿主进程，因此默认关闭，
+# 必须显式启用（与 stdio MCP 的 host_trusted 治理语义一致）。关闭时
+# 语义查询保持逐次起停的现状，行为无漂移。
+resident_enabled = false
+idle_timeout = "10m"     # 空闲会话回收窗口（1s 到 1h）
+max_servers = 2          # 单 workspace 并发 server 上限
+cache_capacity = 256     # 语义查询结果缓存条目上限
+
+# 受影响测试分析的反向依赖闭包边界：跳数上限与单次回答的文件数上限。
+# 三跳覆盖直接依赖方、其依赖方与再一层；默认值的依据是词法图的
+# 同名误报随跳数累积快于召回收益。
+impact_max_depth = 3
+impact_max_results = 200
 
 [context.repo_map]
 enabled = true

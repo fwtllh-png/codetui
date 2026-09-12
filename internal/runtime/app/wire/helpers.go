@@ -103,6 +103,18 @@ func openRepositoryIndex(
 	}
 	index, err := repoindex.NewIndex(rows, walker, repoindex.Options{
 		MaxFileBytes: settings.MaxFileBytes, MaxFiles: settings.MaxFiles,
+		SignatureMaxBytes: settings.SignatureMaxBytes,
+		DocstringMaxBytes: settings.DocstringMaxBytes,
+		ReferenceMaxCount:  settings.ReferenceMaxCount,
+		Rank: repoindex.RankOptions{
+			Damping:     settings.RankDamping,
+			Iterations:  settings.RankIterations,
+			Convergence: settings.RankConvergence,
+		},
+		Impact: repoindex.ImpactOptions{
+			MaxDepth:   settings.ImpactMaxDepth,
+			MaxResults: settings.ImpactMaxResults,
+		},
 	})
 	if err != nil {
 		return nil, repoindex.StatusDegraded

@@ -8,6 +8,8 @@ import (
 	"os"
 
 	"github.com/fwtllh-png/QCode/internal/adapter/tool"
+	"github.com/fwtllh-png/QCode/internal/adapter/lsp"
+	"github.com/fwtllh-png/QCode/internal/platform/symbols"
 	"github.com/fwtllh-png/QCode/internal/adapter/tool/builtin"
 	webtool "github.com/fwtllh-png/QCode/internal/adapter/tool/web"
 	"github.com/fwtllh-png/QCode/internal/config"
@@ -173,12 +175,35 @@ func (builtinToolsModule) Build(
 		)
 		return nil
 	}
+	// A resident language-server pool answers semantic queries without
+	// restarting a server each time. It is a host process, so it exists only
+	// where the configuration explicitly enables it; the session otherwise
+	// keeps the one-shot checker, byte for byte.
+	var semantic symbols.Provider
+	if lspSettings := state.config.snapshot.Config.Context.LSP; lspSettings.ResidentEnabled {
+		pool := lsp.NewResident(lsp.Checker{
+			Root: state.config.execution.Workspace,
+			Sandbox: state.platform.backend,
+		}, lsp.ResidentOptions{
+			IdleTimeout:   lspSettings.IdleTimeout,
+			MaxServers:    lspSettings.MaxServers,
+			CacheCapacity: lspSettings.CacheCapacity,
+		})
+		if err := state.session.RegisterResource(
+			"lsp-resident-sessions",
+			func(context.Context) error { return pool.Close() },
+		); err != nil {
+			return fmt.Errorf("register language-server sessions: %w", err)
+		}
+		semantic = pool
+	}
 	registry, handles, err := builtin.NewWithAuthority(
 		state.config.execution.Workspace,
 		state.platform.backend,
 		state.session.content,
 		state.session.processes,
 		state.platform.repositoryIndex,
+		semantic,
 		state.platform.leaseAuthority, state.config.execution.LeaseTimeout,
 		state.platform.web,
 	)

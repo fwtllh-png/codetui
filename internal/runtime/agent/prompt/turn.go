@@ -7,6 +7,7 @@ import (
 	"github.com/fwtllh-png/QCode/internal/adapter/provider"
 	agentcontext "github.com/fwtllh-png/QCode/internal/runtime/agent/context"
 	"github.com/fwtllh-png/QCode/internal/runtime/agent/repository"
+	"github.com/fwtllh-png/QCode/internal/persist/repoindex"
 )
 
 const (
@@ -153,6 +154,15 @@ func renderRepoMap(options TurnOptions) string {
 				fmt.Fprintf(&b, "    %d %s %s", symbol.Line, symbol.Kind, symbol.Name)
 				if symbol.Container != "" {
 					fmt.Fprintf(&b, " (in %s)", symbol.Container)
+				}
+				// The signature is what the model would otherwise re-read the
+				// file for; the resolution suffix keeps a heuristic row from
+				// reading as a rule-table one.
+				if symbol.Signature != "" {
+					fmt.Fprintf(&b, " :: %s", symbol.Signature)
+					if symbol.Resolution == repoindex.ResolutionHeuristic {
+						b.WriteString(" [heuristic]")
+					}
 				}
 				b.WriteByte('\n')
 			}
